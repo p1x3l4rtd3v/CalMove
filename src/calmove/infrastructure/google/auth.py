@@ -1,4 +1,4 @@
-"""OAuth installed-app loopback flow and OS-keyring token storage."""
+"""OAuth flows (installed-app loopback and web-app PKCE) and OS-keyring token storage."""
 
 import contextlib
 import json
@@ -9,7 +9,7 @@ import keyring
 import keyring.errors
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 
 SOURCE_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 DESTINATION_SCOPES = [
@@ -57,6 +57,49 @@ def authenticate(
     creds = flow.run_local_server(port=0)
     store.save(role, creds)
     return creds
+
+
+def web_authorization_url(
+    scopes: Sequence[str],
+    client_secret_path: Path,
+    redirect_uri: str,
+) -> tuple[str, str, str]:
+    """Start the web-app PKCE flow; return ``(authorization_url, state, code_verifier)``.
+
+    ``access_type=online`` keeps the grant session-scoped (no refresh token is ever
+    issued), and ``prompt=select_account`` lets the user pick the right workspace
+    account for each of the two logins.
+    """
+    flow = Flow.from_client_secrets_file(
+        str(client_secret_path),
+        scopes=list(scopes),
+        redirect_uri=redirect_uri,
+        autogenerate_code_verifier=True,
+    )
+    url, state = flow.authorization_url(access_type="online", prompt="select_account")
+    return str(url), str(state), str(flow.code_verifier)
+
+
+def web_exchange_code(
+    scopes: Sequence[str],
+    client_secret_path: Path,
+    redirect_uri: str,
+    *,
+    code: str,
+    state: str,
+    code_verifier: str,
+) -> Credentials:
+    """Exchange the authorization ``code`` for credentials (held in memory only)."""
+    flow = Flow.from_client_secrets_file(
+        str(client_secret_path),
+        scopes=list(scopes),
+        redirect_uri=redirect_uri,
+        state=state,
+        code_verifier=code_verifier,
+    )
+    flow.fetch_token(code=code)
+    credentials: Credentials = flow.credentials
+    return credentials
 
 
 def _try_refresh(creds: Credentials) -> Credentials | None:

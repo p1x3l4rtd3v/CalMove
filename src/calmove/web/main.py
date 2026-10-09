@@ -1,0 +1,412 @@
+"""CalMove web — Flask wizard and second composition root.
+
+Stateless by design: all per-user state (OAuth-backed gateways, calendar lists,
+results) lives in the RAM-only :class:`SessionStore`. The service holds no admin or
+service-account credentials; every request acts solely under the OAuth grants of the
+browser session driving it (Constitution art. 6).
+"""
+
+import json
+import os
+import threading
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from flask import Flask, abort, redirect, render_template, request, url_for
+from flask.typing import ResponseReturnValue
+from googleapiclient.discovery import build
+
+from calmove.application.migrate_calendar import (
+    MigrateCalendarUseCase,
+    MigrationRequest,
+)
+from calmove.application.ports import CalendarReader, CalendarWriter
+from calmove.domain.date_range import DateRange
+from calmove.domain.errors import CalMoveError, InvalidDateRangeError
+from calmove.domain.model import Calendar, CalendarEvent
+from calmove.infrastructure.google.auth import (
+    DESTINATION_SCOPES,
+    SOURCE_SCOPES,
+    web_authorization_url,
+    web_exchange_code,
+)
+from calmove.infrastructure.google.gateway import GoogleCalendarGateway
+from calmove.web.sessions import (
+    DEFAULT_TTL_SECONDS,
+    SessionReporter,
+    SessionStore,
+    WebSession,
+)
+
+_COOKIE = "calmove_session"
+_ROLES = ("source", "destination")
+_WRITABLE_ROLES = frozenset({"writer", "owner"})
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WebConfig:
+    """Static service configuration; read once from the environment, never per user."""
+
+    client_secret: Path
+    base_url: str
+    room_map: Mapping[str, str] = field(default_factory=dict)
+    session_ttl: float = DEFAULT_TTL_SECONDS
+    host: str = "0.0.0.0"  # noqa: S104 — containerized service behind a reverse proxy
+    port: int = 8080
+
+    @classmethod
+    def from_env(cls) -> "WebConfig":
+        client_secret = Path(_require_env("CALMOVE_WEB_CLIENT_SECRET"))
+        if not client_secret.is_file():
+            raise SystemExit(f"OAuth web client secret not found: {client_secret}")
+        base_url = _require_env("CALMOVE_WEB_BASE_URL").rstrip("/")
+        room_map: dict[str, str] = {}
+        room_map_path = os.environ.get("CALMOVE_WEB_ROOM_MAP")
+        if room_map_path:
+            payload = json.loads(Path(room_map_path).read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in payload.items()
+            ):
+                raise SystemExit("Room map must be a JSON object of old → new room e-mails.")
+            room_map = payload
+        return cls(
+            client_secret=client_secret,
+            base_url=base_url,
+            room_map=room_map,
+            port=int(os.environ.get("CALMOVE_WEB_PORT", "8080")),
+        )
+
+    @property
+    def redirect_uri(self) -> str:
+        return f"{self.base_url}/oauth/callback"
+
+
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise SystemExit(f"Required environment variable {name} is not set.")
+    return value
+
+
+class GoogleWebOAuth:
+    """Default OAuth adapter delegating to the web-app PKCE flow in infrastructure."""
+
+    def __init__(self, client_secret: Path, redirect_uri: str) -> None:
+        self._client_secret = client_secret
+        self._redirect_uri = redirect_uri
+
+    def authorization_url(self, scopes: Sequence[str]) -> tuple[str, str, str]:
+        return web_authorization_url(scopes, self._client_secret, self._redirect_uri)
+
+    def exchange(
+        self, scopes: Sequence[str], *, code: str, state: str, code_verifier: str
+    ) -> object:
+        return web_exchange_code(
+            scopes,
+            self._client_secret,
+            self._redirect_uri,
+            code=code,
+            state=state,
+            code_verifier=code_verifier,
+        )
+
+
+def _default_gateway_factory(credentials: object) -> GoogleCalendarGateway:
+    service: Any = build("calendar", "v3", credentials=credentials)
+    return GoogleCalendarGateway(service)
+
+
+class _NullReporter:
+    """Reporter for the dry-run planning pass; the plan page speaks instead."""
+
+    def event_created(self, event: CalendarEvent) -> None:
+        pass
+
+    def event_skipped(self, event: CalendarEvent) -> None:
+        pass
+
+    def event_failed(self, event: CalendarEvent, error: Exception) -> None:
+        pass
+
+
+def create_app(
+    config: WebConfig,
+    *,
+    store: SessionStore | None = None,
+    oauth: GoogleWebOAuth | None = None,
+    gateway_factory: Callable[[object], Any] | None = None,
+) -> Flask:
+    """Build the Flask app; ``oauth``/``gateway_factory`` are injectable for tests."""
+    app = Flask(__name__)
+    sessions = store if store is not None else SessionStore(ttl_seconds=config.session_ttl)
+    auth = oauth if oauth is not None else GoogleWebOAuth(config.client_secret, config.redirect_uri)
+    make_gateway = gateway_factory if gateway_factory is not None else _default_gateway_factory
+    secure_cookie = config.base_url.startswith("https")
+
+    def current_session() -> WebSession | None:
+        return sessions.get(request.cookies.get(_COOKIE))
+
+    def require_session() -> WebSession:
+        session = current_session()
+        if session is None:
+            abort(redirect(url_for("index")))
+        return session
+
+    def check_csrf(session: WebSession) -> None:
+        if request.form.get("csrf") != session.csrf_token:
+            abort(400, description="Invalid CSRF token.")
+
+    def fail(message: str, status: int = 400) -> ResponseReturnValue:
+        return render_template("error.html", message=message), status
+
+    @app.get("/")
+    def index() -> ResponseReturnValue:
+        return render_template("start.html")
+
+    @app.post("/start")
+    def start() -> ResponseReturnValue:
+        session = sessions.create()
+        response = app.make_response(redirect(url_for("login", role="source")))
+        response.set_cookie(
+            _COOKIE,
+            session.id,
+            httponly=True,
+            samesite="Lax",
+            secure=secure_cookie,
+            path="/",
+        )
+        return response
+
+    @app.get("/login/<role>")
+    def login(role: str) -> ResponseReturnValue:
+        if role not in _ROLES:
+            abort(404)
+        session = require_session()
+        scopes = SOURCE_SCOPES if role == "source" else DESTINATION_SCOPES
+        url, state, verifier = auth.authorization_url(scopes)
+        session.oauth_role = role
+        session.oauth_state = state
+        session.oauth_verifier = verifier
+        return redirect(url)
+
+    @app.get("/oauth/callback")
+    def oauth_callback() -> ResponseReturnValue:
+        session = require_session()
+        if request.args.get("error"):
+            return fail(f"Google sign-in was not completed: {request.args['error']}")
+        code = request.args.get("code")
+        state = request.args.get("state")
+        role = session.oauth_role
+        if (
+            not code
+            or not state
+            or role is None
+            or session.oauth_state is None
+            or session.oauth_verifier is None
+            or state != session.oauth_state
+        ):
+            abort(400, description="OAuth state mismatch.")
+        scopes = SOURCE_SCOPES if role == "source" else DESTINATION_SCOPES
+        try:
+            credentials = auth.exchange(
+                scopes, code=code, state=state, code_verifier=session.oauth_verifier
+            )
+        except Exception:  # oauthlib raises library-specific errors; show one friendly page
+            return fail("The sign-in could not be completed. Please start over.")
+        session.oauth_role = None
+        session.oauth_state = None
+        session.oauth_verifier = None
+        gateway = make_gateway(credentials)
+        if role == "source":
+            session.source = gateway
+            session.source_calendars = list(gateway.list_calendars())
+        else:
+            session.destination = gateway
+            session.destination_calendars = list(gateway.list_calendars())
+        return redirect(url_for("pick_calendar", role=role))
+
+    @app.route("/calendars/<role>", methods=["GET", "POST"])
+    def pick_calendar(role: str) -> ResponseReturnValue:
+        if role not in _ROLES:
+            abort(404)
+        session = require_session()
+        calendars = session.source_calendars if role == "source" else session.destination_calendars
+        ready = session.source is not None if role == "source" else session.destination is not None
+        if not ready:
+            return redirect(url_for("index"))
+        if not calendars:
+            return fail(f"No calendars found for the {role} account.")
+        message: str | None = None
+        if request.method == "POST":
+            check_csrf(session)
+            chosen = _find_calendar(calendars, request.form.get("calendar_id"))
+            if chosen is None:
+                message = "Pick one of the listed calendars."
+            elif role == "destination" and chosen.access_role not in _WRITABLE_ROLES:
+                message = (
+                    f"'{chosen.summary or chosen.id}' has access role '{chosen.access_role}'; "
+                    "the destination needs 'writer' or 'owner'."
+                )
+            elif role == "source":
+                session.source_calendar = chosen
+                return redirect(url_for("login", role="destination"))
+            else:
+                session.destination_calendar = chosen
+                return redirect(url_for("date_range"))
+        return render_template(
+            "calendars.html",
+            role=role,
+            calendars=calendars,
+            csrf=session.csrf_token,
+            message=message,
+        )
+
+    @app.route("/range", methods=["GET", "POST"])
+    def date_range() -> ResponseReturnValue:
+        session = require_session()
+        if session.destination_calendar is None or session.source_calendar is None:
+            return redirect(url_for("index"))
+        message: str | None = None
+        if request.method == "POST":
+            check_csrf(session)
+            try:
+                session.date_range = _parse_range(request.form)
+            except InvalidDateRangeError as error:
+                message = str(error)
+            else:
+                source, destination = _gateways(session)
+                plan_request = _build_request(session, config, dry_run=True)
+                try:
+                    session.plan = MigrateCalendarUseCase(
+                        source, destination, _NullReporter()
+                    ).execute(plan_request)
+                except CalMoveError as error:
+                    return fail(str(error))
+                return redirect(url_for("plan"))
+        return render_template("range.html", csrf=session.csrf_token, message=message)
+
+    @app.get("/plan")
+    def plan() -> ResponseReturnValue:
+        session = require_session()
+        if session.plan is None:
+            return redirect(url_for("index"))
+        return render_template("plan.html", plan=session.plan, csrf=session.csrf_token)
+
+    @app.post("/migrate")
+    def migrate() -> ResponseReturnValue:
+        session = require_session()
+        check_csrf(session)
+        if session.plan is None or session.status != "setup":
+            return redirect(url_for("index"))
+        if request.form.get("confirm", "").strip() != "migrate":
+            return fail("Confirmation word did not match; nothing was written.", 400)
+        session.status = "running"
+        source, destination = _gateways(session)
+        run_request = _build_request(session, config, dry_run=False)
+        use_case = MigrateCalendarUseCase(source, destination, SessionReporter(session))
+
+        def run() -> None:
+            try:
+                result = use_case.execute(run_request)
+            except Exception as error:  # per-run guard: the thread must record, not die
+                with session.lock:
+                    session.error = str(error)
+                    session.status = "failed"
+            else:
+                with session.lock:
+                    session.report = result
+                    session.status = "done"
+
+        threading.Thread(target=run, daemon=True).start()
+        return redirect(url_for("progress"))
+
+    @app.get("/progress")
+    def progress() -> ResponseReturnValue:
+        session = require_session()
+        if session.status == "setup":
+            return redirect(url_for("index"))
+        with session.lock:
+            return render_template(
+                "progress.html",
+                status=session.status,
+                created=session.progress_created,
+                skipped=session.progress_skipped,
+                failed=list(session.progress_failed),
+                error=session.error,
+                csrf=session.csrf_token,
+            )
+
+    @app.post("/finish")
+    def finish() -> ResponseReturnValue:
+        session = require_session()
+        check_csrf(session)
+        sessions.delete(session.id)
+        response = app.make_response(render_template("finished.html"))
+        response.delete_cookie(_COOKIE, path="/")
+        return response
+
+    return app
+
+
+def _find_calendar(calendars: list[Calendar], calendar_id: str | None) -> Calendar | None:
+    for calendar in calendars:
+        if calendar.id == calendar_id:
+            return calendar
+    return None
+
+
+def _parse_range(form: Mapping[str, str]) -> DateRange:
+    preset = form.get("preset", "future")
+    if preset == "everything":
+        return DateRange.everything()
+    if preset == "custom":
+        return DateRange.between(_parse_date(form.get("start")), _parse_date(form.get("end")))
+    return DateRange.future()
+
+
+def _parse_date(raw: str | None) -> datetime:
+    if not raw:
+        raise InvalidDateRangeError("Both custom dates are required (YYYY-MM-DD).")
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=UTC)
+    except ValueError:
+        raise InvalidDateRangeError(f"Invalid date: {raw!r}; use YYYY-MM-DD.") from None
+
+
+def _gateways(session: WebSession) -> tuple[CalendarReader, CalendarWriter]:
+    """Both gateways, guaranteed by route order; defensive error otherwise."""
+    if session.source is None or session.destination is None:
+        raise RuntimeError("Session is not fully authenticated.")
+    return session.source, session.destination
+
+
+def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> MigrationRequest:
+    if (
+        session.source_calendar is None
+        or session.destination_calendar is None
+        or session.date_range is None
+    ):
+        raise RuntimeError("Wizard state is incomplete.")
+    return MigrationRequest(
+        source_calendar_id=session.source_calendar.id,
+        destination_calendar_id=session.destination_calendar.id,
+        date_range=session.date_range,
+        dry_run=dry_run,
+        send_updates="none",
+        room_map=config.room_map,
+    )
+
+
+def main() -> None:
+    """Entry point for the ``calmove-web`` script (waitress, single process)."""
+    from waitress import serve
+
+    config = WebConfig.from_env()
+    app = create_app(config)
+    serve(app, host=config.host, port=config.port, threads=8)
+
+
+__all__ = ["GoogleWebOAuth", "WebConfig", "create_app", "main"]

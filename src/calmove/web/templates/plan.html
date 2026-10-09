@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Migration plan (dry run — nothing has been written)</h2>
+<table>
+  <tr><th>Would create</th><td>{{ plan.created }}</td></tr>
+  <tr><th>Already migrated (skipped)</th><td>{{ plan.skipped }}</td></tr>
+  <tr><th>Problems</th><td>{{ plan.failed | length }}</td></tr>
+</table>
+{% if plan.unmapped_rooms %}
+<p class="error">Rooms without a mapping in the new workspace (will be dropped):</p>
+<ul>{% for room in plan.unmapped_rooms | sort %}<li>{{ room }}</li>{% endfor %}</ul>
+{% endif %}
+{% if plan.failed %}
+<ul class="error">{% for event_id, msg in plan.failed %}<li>{{ event_id }}: {{ msg }}</li>{% endfor %}</ul>
+{% endif %}
+{% if plan.created %}
+<form method="post" action="{{ url_for('migrate') }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Type <strong>migrate</strong> to start for real:
+    <input type="text" name="confirm" autocomplete="off"></label>
+  <button type="submit">Migrate</button>
+</form>
+{% else %}
+<p>Nothing to migrate.</p>
+<form method="post" action="{{ url_for('finish') }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button type="submit">Finish</button>
+</form>
+{% endif %}
+{% endblock %}

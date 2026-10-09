@@ -11,10 +11,13 @@ dependencies = [
     "keyring",
     "typer",
     "rich",
+    "flask",
+    "waitress",
 ]
 
 [project.scripts]
 calmove = "calmove.cli.main:app"
+calmove-web = "calmove.web.main:main"
 
 [dependency-groups]
 dev = [
@@ -51,6 +54,7 @@ module = [
     "google_auth_oauthlib.*",
     "google.*",
     "keyring.*",
+    "waitress.*",
 ]
 ignore_missing_imports = true
 

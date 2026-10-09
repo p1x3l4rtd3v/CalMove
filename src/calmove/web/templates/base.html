@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CalMove</title>
+  {% block head %}{% endblock %}
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+    table { border-collapse: collapse; margin: 1rem 0; }
+    th, td { border: 1px solid #bbb; padding: .3rem .7rem; text-align: left; }
+    .error { color: #b00020; }
+    .muted { color: #666; font-size: .9rem; }
+    button { padding: .4rem 1rem; }
+    label { display: block; margin: .25rem 0; }
+  </style>
+</head>
+<body>
+  <h1>CalMove</h1>
+  {% block body %}{% endblock %}
+  <p class="muted">All data stays in this session's server memory only — nothing is stored,
+     and the session is erased when you finish or after 30 minutes of inactivity.</p>
+</body>
+</html>

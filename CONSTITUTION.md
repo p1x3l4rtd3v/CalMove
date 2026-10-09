@@ -6,7 +6,7 @@ MAY) are normative. See `docs/SPECIFICATION.md` for the full technical specifica
 ## Article 1 — Clean Architecture
 
 1. The codebase is organized in four layers: **domain** → **application** → **infrastructure**
-   → **presentation/cli**. Dependencies MUST point strictly inward.
+   → **presentation** (`cli`, `web`). Dependencies MUST point strictly inward.
 2. Allowed imports per layer (identical to spec §3):
 
    | Layer | Package | May import |
@@ -14,13 +14,13 @@ MAY) are normative. See `docs/SPECIFICATION.md` for the full technical specifica
    | Domain | `calmove/domain` | stdlib only |
    | Application | `calmove/application` | domain |
    | Infrastructure | `calmove/infrastructure` | application ports, domain, Google SDKs, keyring |
-   | Presentation | `calmove/cli` | application, domain, infrastructure (composition root) |
+   | Presentation | `calmove/cli`, `calmove/web` | application, domain, infrastructure (composition roots) |
 
 3. The domain MUST remain pure: standard library only, no I/O, no third-party imports.
 4. Google SDKs (`googleapiclient`, `google_auth_oauthlib`, `google.*`) MUST be confined to
    `calmove/infrastructure`.
-5. `calmove/cli` is the **only** composition root. No other layer MUST instantiate adapters or
-   wire dependencies.
+5. `calmove/cli` and `calmove/web` are the **only** composition roots. No other layer MUST
+   instantiate adapters or wire dependencies.
 
 ## Article 2 — Ports and Adapters
 
@@ -57,12 +57,18 @@ MAY) are normative. See `docs/SPECIFICATION.md` for the full technical specifica
 
 1. OAuth scopes MUST be least-privilege: the source login uses `calendar.readonly` only; the
    destination login uses `calendar.events` + `calendar.readonly`.
-2. Tokens MUST be stored only in the OS keyring (service `calmove`) — never in files.
+2. CLI mode: tokens MUST be stored only in the OS keyring (service `calmove`) — never in files.
+   Web mode: tokens MUST exist only in server process memory, bound to one browser session,
+   and MUST NOT be written to disk, database, or logs; they are erased when the session ends
+   or expires.
 3. Secrets (`client_secret*.json`, tokens) MUST NOT be committed; `.gitignore` blocks them.
 4. API writes MUST happen only after explicit user confirmation; `--dry-run` performs zero
    writes.
 5. `sendUpdates` MUST default to `none` so migrations do not spam attendees.
-6. CI MUST run `pip-audit` against the pinned lockfile.
+6. The web service MUST NOT hold admin, service-account, or domain-wide-delegation
+   credentials; every migration runs solely under the OAuth grants of the user driving that
+   session, and no session may read another session's state.
+7. CI MUST run `pip-audit` against the pinned lockfile.
 
 ## Article 7 — Simplicity
 

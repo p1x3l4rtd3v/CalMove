@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block head %}{% if status == "running" %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block body %}
+{% if status == "running" %}
+<h2>Migrating…</h2>
+{% elif status == "failed" %}
+<h2 class="error">Migration failed</h2>
+<p class="error">{{ error }}</p>
+{% else %}
+<h2>Migration finished</h2>
+{% endif %}
+<table>
+  <tr><th>Created</th><td>{{ created }}</td></tr>
+  <tr><th>Skipped</th><td>{{ skipped }}</td></tr>
+  <tr><th>Failed</th><td>{{ failed | length }}</td></tr>
+</table>
+{% if failed %}
+<ul class="error">{% for event_id, msg in failed %}<li>{{ event_id }}: {{ msg }}</li>{% endfor %}</ul>
+{% endif %}
+{% if status != "running" %}
+<form method="post" action="{{ url_for('finish') }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button type="submit">Finish &amp; erase session</button>
+</form>
+{% endif %}
+{% endblock %}

@@ -14,9 +14,9 @@ Clean architecture with a strict inward dependency rule — enforce it in every 
 | Domain | `src/calmove/domain/` | stdlib only |
 | Application | `src/calmove/application/` | domain |
 | Infrastructure | `src/calmove/infrastructure/` | application ports, domain, Google SDKs, keyring |
-| Presentation | `src/calmove/cli/` | everything (sole composition root) |
+| Presentation | `src/calmove/cli/`, `src/calmove/web/` | everything (the two composition roots) |
 
-Flow: CLI wizard authenticates both workspaces (OAuth loopback, tokens in OS keyring) →
+Flow (CLI): wizard authenticates both workspaces (OAuth loopback, tokens in OS keyring) →
 `GoogleCalendarGateway` fetches source events (`singleEvents=False`, paginated) →
 `MigrateCalendarUseCase` partitions recurring masters/singles vs. recurrence exceptions, skips
 already-migrated events (idempotency via `extendedProperties.private["calmove-source-id"]`),
@@ -27,11 +27,18 @@ The application layer talks only to `Protocol`s in `src/calmove/application/port
 (`CalendarReader`, `CalendarWriter`, `MigrationReporter`). Never import Google SDK types inside
 domain/application.
 
+The web presentation (`src/calmove/web/`) serves the same wizard as a stateless Flask flow
+(spec §10): web-app PKCE OAuth per browser session, all state (gateways, calendar lists,
+results) in the RAM-only `SessionStore` — never on disk, never in logs, never shared between
+sessions. Single-process threaded server (waitress); the migration itself runs in a
+per-session background thread.
+
 ## Key Directories
 - `src/calmove/domain/` — frozen dataclasses (`model.py`), `DateRange` presets (`date_range.py`), error hierarchy (`errors.py`). Pure, no I/O.
 - `src/calmove/application/` — `migrate_calendar.py` (the one use case), `ports.py`.
 - `src/calmove/infrastructure/google/` — `auth.py` (OAuth + `KeyringTokenStore`), `gateway.py` (API adapter), `mapping.py` (pure API-dict ⇄ domain conversion).
 - `src/calmove/cli/` — Typer wizard (`main.py`), prompt helpers (`prompts.py`).
+- `src/calmove/web/` — Flask wizard (`main.py`), RAM-only `SessionStore` (`sessions.py`), `templates/`.
 - `tests/unit/` — offline unit tests; in-memory fakes live in `tests/conftest.py`.
 
 ## Development Commands
@@ -43,6 +50,7 @@ uv run ruff check .        # lint
 uv run mypy src            # strict type check
 uv run pip-audit           # dependency audit
 uv run calmove migrate --client-secret path/to/client_secret.json [--dry-run]
+uv run calmove-web         # web mode; needs CALMOVE_WEB_CLIENT_SECRET + CALMOVE_WEB_BASE_URL
 ```
 All five checks (format, lint, mypy, pytest, pip-audit) are CI merge gates (`.github/workflows/ci.yml`, 3-OS matrix).
 
@@ -51,12 +59,13 @@ All five checks (format, lint, mypy, pytest, pip-audit) are CI merge gates (`.gi
 - `mypy --strict`; no `# type: ignore` without a justification comment. Untyped Google SDK calls are confined to `infrastructure/google/auth.py` via a scoped pyproject override — do not widen it.
 - Domain/application dataclasses: `@dataclass(frozen=True, slots=True, kw_only=True)`; collections as tuples. Only `MigrationResult` is mutable.
 - Error handling: domain errors subclass `CalMoveError`. Per-event writer failures are caught, recorded as `(event_id, message)` tuples, and the migration continues.
-- Dependency injection by constructor: the use case receives reader/writer/reporter protocols; `cli/main.py` is the only place concrete adapters are wired.
+- Dependency injection by constructor: the use case receives reader/writer/reporter protocols; `cli/main.py` and `web/main.py` (`create_app`) are the only places concrete adapters are wired.
 - No async — the Google client is synchronous; keep it that way.
 - Mapping functions in `mapping.py` are pure and round-trip-tested (`event_from_api(event_to_api(e))` must invert).
 
 ## Important Files
 - `src/calmove/cli/main.py` — entry point (`calmove = "calmove.cli.main:app"` in pyproject).
+- `src/calmove/web/main.py` — web entry point (`calmove-web = "calmove.web.main:main"`); `create_app` takes injectable `oauth`/`gateway_factory` for offline tests.
 - `src/calmove/application/migrate_calendar.py` — core algorithm (skip/create/exception ordering).
 - `src/calmove/infrastructure/google/mapping.py` — field coverage lives here; extend it when supporting new event attributes.
 - `pyproject.toml` — single source for deps + ruff/mypy/pytest config.

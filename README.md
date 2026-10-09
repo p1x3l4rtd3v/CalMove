@@ -81,6 +81,32 @@ uv run calmove logout
 
 Removes the stored OAuth tokens from the OS keyring.
 
+## Web service mode (Docker)
+
+For staff who cannot install software: the same wizard as a browser flow
+(spec [§10](docs/SPECIFICATION.md#10-web-deployment-mode-docker)). Each migration runs solely
+under the OAuth grants of the user driving that browser session — the service never holds
+admin or service-account credentials, persists nothing (tokens and event data live only in
+per-session server RAM, erased on finish or after 30 minutes idle), and sessions cannot see
+each other.
+
+It needs a **Web application** OAuth client (not Desktop) with the redirect URI
+`<base-url>/oauth/callback` and an *External* consent screen so accounts from both
+workspaces can sign in.
+
+```sh
+docker build -t calmove-web .
+docker run --rm -p 8080:8080 \
+  -v /path/to/web_client_secret.json:/run/secrets/client_secret.json:ro \
+  -e CALMOVE_WEB_CLIENT_SECRET=/run/secrets/client_secret.json \
+  -e CALMOVE_WEB_BASE_URL=https://calmove.example.com \
+  calmove-web
+```
+
+Terminate TLS at a reverse proxy in front of the container. Optional:
+`CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_PORT` (default 8080).
+Run it locally without Docker via `uv run calmove-web`.
+
 ## Known limitations
 
 | Item | Behavior |

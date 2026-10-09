@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Session erased</h2>
+<p>All tokens and calendar data for this session have been removed from server memory.
+   You can close this window.</p>
+<p><a href="{{ url_for('index') }}">Start another migration</a></p>
+{% endblock %}

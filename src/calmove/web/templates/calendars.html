@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Pick the {{ role }} calendar</h2>
+{% if message %}<p class="error">{{ message }}</p>{% endif %}
+<form method="post">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% for calendar in calendars %}
+  <label>
+    <input type="radio" name="calendar_id" value="{{ calendar.id }}" required>
+    {{ calendar.summary or calendar.id }}
+    <span class="muted">({{ calendar.access_role }}{% if calendar.primary %}, primary{% endif %})</span>
+  </label>
+  {% endfor %}
+  <button type="submit">Continue</button>
+</form>
+{% endblock %}

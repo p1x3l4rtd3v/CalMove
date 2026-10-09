@@ -233,8 +233,9 @@ Key behaviors:
 - **Least-privilege scopes**: source login uses `calendar.readonly` only; destination login uses
   `calendar.events` + `calendar.readonly` (calendar listing). The tool is physically unable to
   modify the old workspace.
-- **Token storage**: refresh/access tokens go into the OS keychain via `keyring`
-  (macOS Keychain, Windows Credential Manager) — never plaintext files. `calmove logout` wipes them.
+- **Token storage**: CLI mode puts refresh/access tokens into the OS keychain via `keyring`
+  (macOS Keychain, Windows Credential Manager) — never plaintext files; `calmove logout` wipes
+  them. Web mode (§10) holds tokens only in server RAM, scoped to one browser session.
 - **No secrets in repo**: users supply their own OAuth *Desktop* client (`client_secret.json`,
   path via `--client-secret` or `CALMOVE_CLIENT_SECRET` env var); `.gitignore` blocks
   `client_secret*.json` and token files.
@@ -253,13 +254,15 @@ CalMove/
 │   ├── application/       # ports.py, migrate_calendar.py        (use case + ports)
 │   ├── infrastructure/
 │   │   └── google/        # auth.py, gateway.py, mapping.py      (OAuth, API, dict⇄domain)
-│   └── cli/               # main.py, prompts.py                  (Typer wizard, composition root)
+│   ├── cli/               # main.py, prompts.py                  (Typer wizard, composition root)
+│   └── web/               # main.py, sessions.py, templates/     (Flask wizard, composition root)
 ├── tests/
 │   ├── unit/              # domain, use case (with in-memory fakes), mapping round-trips
 │   └── conftest.py
 ├── docs/SPECIFICATION.md  # this file
 ├── CONSTITUTION.md        # architectural constitution (binding rules)
 ├── AGENTS.md              # repository guidelines for AI assistants
+├── Dockerfile             # stateless web-service image (uv + waitress)
 └── pyproject.toml         # uv-managed; ruff, mypy, pytest config
 ```
 
@@ -272,3 +275,59 @@ CalMove/
   recurring, and exception events.
 - **No live-API tests** in CI; the Google gateway stays thin so everything above it is testable
   offline.
+
+## 10. Web Deployment Mode (Docker)
+
+A second presentation layer, `calmove/web`, serves the same wizard as a browser flow for staff
+who cannot install software. It reuses the use case, ports, gateway, and mapping unchanged.
+
+### Privacy requirements (binding, Constitution art. 6)
+
+1. **Per-user OAuth only.** Each migration runs exclusively under the OAuth grants of the user
+   driving that browser session: sign in to the old workspace (`calendar.readonly`), then the
+   new one (`calendar.events` + `calendar.readonly`). The service never holds admin,
+   service-account, or domain-wide-delegation credentials.
+2. **Nothing persisted.** Tokens, calendar lists, and event data live only in process memory
+   inside a per-session object. No database, no files, no event data in logs. Sessions are
+   erased on completion ("Finish" button) or after a 30-minute idle TTL.
+3. **Session isolation.** State is keyed by a 256-bit random session ID in an `HttpOnly`,
+   `SameSite=Lax` cookie; there is no listing, sharing, or admin view of sessions. One user can
+   never reach another session's state.
+
+### Flow
+
+```mermaid
+sequenceDiagram
+    actor U as User (browser)
+    participant W as CalMove web (Docker)
+    participant G as Google OAuth
+    U->>W: GET / — Start
+    W->>U: session cookie, redirect to source login
+    U->>G: authorization (PKCE, readonly scope)
+    G->>W: /oauth/callback?code — tokens into session RAM
+    U->>W: pick source calendar
+    U->>G: authorization (PKCE, events scope)
+    G->>W: /oauth/callback?code
+    U->>W: pick destination calendar, date range
+    W->>U: dry-run plan (read-only)
+    U->>W: type "migrate" to confirm
+    W->>W: background thread runs use case
+    U->>W: /progress (auto-refresh) → report → Finish erases session
+```
+
+### Implementation constraints
+
+- **OAuth web-application client** (not Desktop): redirect URI `<CALMOVE_WEB_BASE_URL>/oauth/callback`,
+  PKCE enabled, consent screen *External* so accounts from both workspaces can sign in. The web
+  flow lives in `infrastructure/google/auth.py` beside the loopback flow.
+- **Single process, threaded server** (`waitress`): the in-memory session store forbids
+  multi-process workers. Scale-out would require shared session state and is out of scope.
+- **Configuration (env only):** `CALMOVE_WEB_CLIENT_SECRET` (path to the web client JSON,
+  mounted as a Docker secret), `CALMOVE_WEB_BASE_URL` (external HTTPS URL), optional
+  `CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_PORT` (default 8080).
+- **Writes only after confirmation**: the plan step is a dry run; the real run starts only
+  after the user types `migrate` (same contract as the CLI). `sendUpdates` is fixed to `none`.
+- **CSRF**: every state-changing POST carries a per-session token; OAuth callbacks validate the
+  `state` parameter against the session.
+- **Deployment**: TLS terminates at the reverse proxy in front of the container; the container
+  runs as a non-root user, has no volumes, and logs only lifecycle lines (never event data).
