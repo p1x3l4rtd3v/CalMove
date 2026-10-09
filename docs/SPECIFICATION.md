@@ -327,7 +327,15 @@ sequenceDiagram
   `CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_PORT` (default 8080).
 - **Writes only after confirmation**: the plan step is a dry run; the real run starts only
   after the user types `migrate` (same contract as the CLI). `sendUpdates` is fixed to `none`.
-- **CSRF**: every state-changing POST carries a per-session token; OAuth callbacks validate the
-  `state` parameter against the session.
-- **Deployment**: TLS terminates at the reverse proxy in front of the container; the container
-  runs as a non-root user, has no volumes, and logs only lifecycle lines (never event data).
+- **CSRF**: every state-changing POST carries a per-session token (constant-time compared);
+  `/start` and `/login/<role>` additionally reject `Sec-Fetch-Site: cross-site` navigations;
+  OAuth callbacks validate the `state` parameter against the session.
+- **Hardening**: every response carries `Content-Security-Policy` (deny-by-default,
+  `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`. The session store caps live sessions (default 1000) and
+  answers 503 beyond it; the migrate confirmation transitions session state atomically so a
+  double submit cannot start two runs.
+- **Deployment**: TLS terminates at the reverse proxy in front of the container; the proxy
+  MUST scrub query strings of `/oauth/callback` from access logs (the single-use PKCE-bound
+  authorization code arrives there). The container runs as a non-root user, has no volumes,
+  and logs only lifecycle lines (never event data).

@@ -66,16 +66,27 @@ class SessionReporter:
             self._session.progress_failed.append((event.id, str(error)))
 
 
+class SessionLimitError(RuntimeError):
+    """Raised when the store is at capacity; the caller should answer 503."""
+
+
 class SessionStore:
-    """Thread-safe in-memory store with lazy TTL eviction; no persistence anywhere."""
+    """Thread-safe in-memory store with lazy TTL eviction; no persistence anywhere.
+
+    ``max_sessions`` caps memory use and keeps the O(n) eviction scan trivially
+    cheap — an unauthenticated flood of ``create()`` calls hits the cap instead of
+    growing the process.
+    """
 
     def __init__(
         self,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        max_sessions: int = 1000,
     ) -> None:
         self._ttl = ttl_seconds
         self._clock = clock
+        self._max_sessions = max_sessions
         self._sessions: dict[str, WebSession] = {}
         self._lock = threading.Lock()
 
@@ -87,6 +98,8 @@ class SessionStore:
         )
         with self._lock:
             self._evict(self._clock())
+            if len(self._sessions) >= self._max_sessions:
+                raise SessionLimitError("session store is at capacity")
             self._sessions[session.id] = session
         return session
 

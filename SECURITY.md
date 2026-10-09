@@ -28,6 +28,9 @@ Mirrors `docs/SPECIFICATION.md` §7:
 - **Per-user authority only (web mode)**: the service holds no admin, service-account, or
   domain-wide-delegation credentials; each migration runs solely under the OAuth grants of
   the session driving it, and sessions are isolated by unguessable random IDs.
+- **Reverse-proxy requirement (web mode)**: the OAuth authorization code arrives as a query
+  parameter on `/oauth/callback` (single-use, PKCE-bound, no refresh token). The fronting
+  proxy must scrub or omit query strings for that path in its access logs.
 - Dependencies are pinned via the `uv` lockfile and audited with `pip-audit` in CI.
 
 ## Reporting a Vulnerability

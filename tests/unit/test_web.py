@@ -8,13 +8,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
 from calmove.domain.date_range import DateRange
 from calmove.domain.model import Calendar, CalendarEvent, EventTime
 from calmove.web.main import WebConfig, create_app
-from calmove.web.sessions import SessionStore, WebSession
+from calmove.web.sessions import SessionLimitError, SessionStore, WebSession
 
 SOURCE_CAL = Calendar(id="src-cal", summary="Team", access_role="owner", primary=True)
 DEST_WRITABLE = Calendar(id="dst-cal", summary="New Team", access_role="writer")
@@ -208,6 +209,20 @@ class TestSessionStore:
         store.delete(session.id)
         assert store.get(session.id) is None
 
+    def test_capacity_limit_rejects_new_sessions(self) -> None:
+        store = SessionStore(max_sessions=2)
+        store.create()
+        store.create()
+        with pytest.raises(SessionLimitError):
+            store.create()
+
+    def test_capacity_frees_up_after_expiry(self) -> None:
+        now = [0.0]
+        store = SessionStore(ttl_seconds=10, clock=lambda: now[0], max_sessions=1)
+        store.create()
+        now[0] = 11.0
+        assert store.create() is not None
+
 
 class TestWizardFlow:
     def test_full_happy_path_migrates_and_erases_session(self) -> None:
@@ -316,3 +331,51 @@ class TestSecurityBoundaries:
         header = response.headers.get("Set-Cookie", "")
         assert "HttpOnly" in header
         assert "SameSite=Lax" in header
+
+    def test_security_headers_present_on_every_response(self) -> None:
+        harness = _harness()
+        response = harness.client().get("/")
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["Referrer-Policy"] == "no-referrer"
+        assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+
+    def test_cross_site_start_and_login_are_rejected(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        response = client.post("/start", headers={"Sec-Fetch-Site": "cross-site"})
+        assert response.status_code == 403
+        client.post("/start")  # legitimate session
+        response = client.get("/login/source", headers={"Sec-Fetch-Site": "cross-site"})
+        assert response.status_code == 403
+        assert harness.session_for(client).oauth_state is None
+
+    def test_start_returns_503_at_capacity(self) -> None:
+        harness = _harness()
+        for _ in range(1000):
+            harness.store.create()
+        response = harness.client().post("/start")
+        assert response.status_code == 503
+
+    def test_second_migrate_submit_does_not_double_run(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        csrf = _advance_to_plan(client, harness)
+        session = harness.session_for(client)
+        first = client.post("/migrate", data={"confirm": "migrate", "csrf": csrf})
+        second = client.post("/migrate", data={"confirm": "migrate", "csrf": csrf})
+        assert first.status_code == 302
+        assert second.status_code == 302
+        assert second.location.endswith("/")
+        _wait_for_completion(session)
+        assert [e.id for _, e, _ in harness.destination.created] == ["evt-1", "evt-2"]
+
+    def test_oauth_error_parameter_is_not_reflected(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        client.post("/start")
+        client.get("/login/source")
+        response = client.get("/oauth/callback?error=<script>alert(1)</script>evil-text")
+        assert response.status_code == 400
+        assert b"evil-text" not in response.data
+        assert b"Google reported an error." in response.data

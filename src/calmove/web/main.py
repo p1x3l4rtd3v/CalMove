@@ -6,6 +6,7 @@ service-account credentials; every request acts solely under the OAuth grants of
 browser session driving it (Constitution art. 6).
 """
 
+import hmac
 import json
 import os
 import threading
@@ -15,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, abort, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, redirect, render_template, request, url_for
 from flask.typing import ResponseReturnValue
 from googleapiclient.discovery import build
 
@@ -36,6 +37,7 @@ from calmove.infrastructure.google.auth import (
 from calmove.infrastructure.google.gateway import GoogleCalendarGateway
 from calmove.web.sessions import (
     DEFAULT_TTL_SECONDS,
+    SessionLimitError,
     SessionReporter,
     SessionStore,
     WebSession,
@@ -156,11 +158,27 @@ def create_app(
         return session
 
     def check_csrf(session: WebSession) -> None:
-        if request.form.get("csrf") != session.csrf_token:
+        if not hmac.compare_digest(request.form.get("csrf", ""), session.csrf_token):
             abort(400, description="Invalid CSRF token.")
+
+    def reject_cross_site() -> None:
+        """Block cross-site navigations into state-changing routes (CSRF pre-session)."""
+        if request.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+            abort(403, description="Cross-site request rejected.")
 
     def fail(message: str, status: int = 400) -> ResponseReturnValue:
         return render_template("error.html", message=message), status
+
+    @app.after_request
+    def security_headers(response: Response) -> Response:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' "
+            "https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'"
+        )
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.get("/")
     def index() -> ResponseReturnValue:
@@ -168,7 +186,11 @@ def create_app(
 
     @app.post("/start")
     def start() -> ResponseReturnValue:
-        session = sessions.create()
+        reject_cross_site()
+        try:
+            session = sessions.create()
+        except SessionLimitError:
+            return fail("The service is at capacity right now; please try again later.", 503)
         response = app.make_response(redirect(url_for("login", role="source")))
         response.set_cookie(
             _COOKIE,
@@ -184,6 +206,7 @@ def create_app(
     def login(role: str) -> ResponseReturnValue:
         if role not in _ROLES:
             abort(404)
+        reject_cross_site()
         session = require_session()
         scopes = SOURCE_SCOPES if role == "source" else DESTINATION_SCOPES
         url, state, verifier = auth.authorization_url(scopes)
@@ -196,7 +219,12 @@ def create_app(
     def oauth_callback() -> ResponseReturnValue:
         session = require_session()
         if request.args.get("error"):
-            return fail(f"Google sign-in was not completed: {request.args['error']}")
+            reason = (
+                "You declined access."
+                if request.args["error"] == "access_denied"
+                else "Google reported an error."
+            )
+            return fail(f"Google sign-in was not completed. {reason}")
         code = request.args.get("code")
         state = request.args.get("state")
         role = session.oauth_role
@@ -299,11 +327,12 @@ def create_app(
     def migrate() -> ResponseReturnValue:
         session = require_session()
         check_csrf(session)
-        if session.plan is None or session.status != "setup":
-            return redirect(url_for("index"))
         if request.form.get("confirm", "").strip() != "migrate":
             return fail("Confirmation word did not match; nothing was written.", 400)
-        session.status = "running"
+        with session.lock:  # atomic check-and-transition: a double submit must not double-run
+            if session.plan is None or session.status != "setup":
+                return redirect(url_for("index"))
+            session.status = "running"
         source, destination = _gateways(session)
         run_request = _build_request(session, config, dry_run=False)
         use_case = MigrateCalendarUseCase(source, destination, SessionReporter(session))
