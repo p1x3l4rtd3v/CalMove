@@ -42,6 +42,15 @@ class _SilentReporter:
     def event_created(self, event: CalendarEvent) -> None:
         pass
 
+    def event_forwarded(self, event: CalendarEvent) -> None:
+        pass
+
+    def event_updated(self, event: CalendarEvent) -> None:
+        pass
+
+    def event_deleted(self, source_id: str) -> None:
+        pass
+
     def event_skipped(self, event: CalendarEvent) -> None:
         pass
 
@@ -62,6 +71,15 @@ class ConsoleReporter:
     def event_created(self, event: CalendarEvent) -> None:
         self._console.print(f"[green]created[/green]  {self._label(event)}")
 
+    def event_forwarded(self, event: CalendarEvent) -> None:
+        self._console.print(f"[blue]forwarded[/blue] {self._label(event)}")
+
+    def event_updated(self, event: CalendarEvent) -> None:
+        self._console.print(f"[cyan]updated[/cyan]  {self._label(event)}")
+
+    def event_deleted(self, source_id: str) -> None:
+        self._console.print(f"[magenta]deleted[/magenta]  {source_id}")
+
     def event_skipped(self, event: CalendarEvent) -> None:
         self._console.print(f"[yellow]skipped[/yellow]  {self._label(event)}")
 
@@ -75,6 +93,11 @@ def _build_gateway(
     creds = authenticate(role, scopes, client_secret, store)
     service: Any = build("calendar", "v3", credentials=creds)
     return GoogleCalendarGateway(service)
+
+
+def _primary_address(calendars: list[Any]) -> str | None:
+    """The account's primary calendar id is its e-mail address."""
+    return next((c.id for c in calendars if c.primary), None)
 
 
 def _load_room_map(path: Path) -> dict[str, str]:
@@ -96,7 +119,10 @@ def _print_plan(result: MigrationResult) -> None:
     table.add_column("Outcome")
     table.add_column("Events", justify="right")
     table.add_row("Would create", str(result.created))
-    table.add_row("Skip (already migrated)", str(result.skipped))
+    table.add_row("Would update (changed at source)", str(result.updated))
+    table.add_row("Would delete (gone from source)", str(result.deleted))
+    table.add_row("Would forward (invited events)", str(result.forwarded))
+    table.add_row("Skip (unchanged)", str(result.skipped))
     table.add_row("Cannot migrate", str(len(result.failed)))
     console.print(table)
     _print_details(result)
@@ -107,6 +133,9 @@ def _print_report(result: MigrationResult) -> None:
     table.add_column("Outcome")
     table.add_column("Events", justify="right")
     table.add_row("Created", str(result.created))
+    table.add_row("Updated", str(result.updated))
+    table.add_row("Deleted", str(result.deleted))
+    table.add_row("Forwarded (invited events)", str(result.forwarded))
     table.add_row("Skipped", str(result.skipped))
     table.add_row("Failed", str(len(result.failed)))
     console.print(table)
@@ -161,13 +190,22 @@ def migrate(
 
     console.print("[bold]Step 1 — sign in to the old (source) workspace[/bold]")
     source = _build_gateway("source", SOURCE_SCOPES, client_secret, store)
-    source_calendar = prompts.pick_calendar(console, source.list_calendars(), role_label="source")
+    source_calendars = source.list_calendars()
+    source_calendar = prompts.pick_calendar(console, source_calendars, role_label="source")
 
     console.print("[bold]Step 2 — sign in to the new (destination) workspace[/bold]")
     destination = _build_gateway("destination", DESTINATION_SCOPES, client_secret, store)
+    destination_calendars = destination.list_calendars()
     destination_calendar = prompts.pick_calendar(
-        console, destination.list_calendars(), role_label="destination", require_writable=True
+        console, destination_calendars, role_label="destination", require_writable=True
     )
+    source_address = _primary_address(source_calendars)
+    forward_address = _primary_address(destination_calendars)
+    if forward_address is None:
+        console.print(
+            "[yellow]No primary calendar found on the destination account — invited "
+            "events cannot be forwarded and will be reported as failures.[/yellow]"
+        )
 
     console.print("[bold]Step 3 — pick a date range[/bold]")
     date_range = prompts.prompt_date_range(console)
@@ -179,16 +217,20 @@ def migrate(
         dry_run=True,
         send_updates=send_updates.value,
         room_map=rooms,
+        source_address=source_address,
+        forward_address=forward_address,
     )
     console.print("[bold]Step 4 — dry run[/bold]")
-    plan = MigrateCalendarUseCase(source, destination, _SilentReporter()).execute(plan_request)
+    plan = MigrateCalendarUseCase(source, destination, _SilentReporter(), forwarder=source).execute(
+        plan_request
+    )
     _print_plan(plan)
 
     if dry_run:
         console.print("Dry run requested — nothing was written.")
         return
 
-    if plan.created == 0:
+    if plan.created == plan.updated == plan.deleted == plan.forwarded == 0:
         console.print("Nothing to migrate.")
         return
 
@@ -204,8 +246,12 @@ def migrate(
         dry_run=False,
         send_updates=send_updates.value,
         room_map=rooms,
+        source_address=source_address,
+        forward_address=forward_address,
     )
-    result = MigrateCalendarUseCase(source, destination, ConsoleReporter(console)).execute(request)
+    result = MigrateCalendarUseCase(
+        source, destination, ConsoleReporter(console), forwarder=source
+    ).execute(request)
     _print_report(result)
 
 

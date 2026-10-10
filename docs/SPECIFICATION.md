@@ -179,28 +179,60 @@ All domain types are **immutable frozen dataclasses** — pure data + behavior, 
 
 ---
 
-## 6. Migration Algorithm
+## 6. Migration Algorithm (synchronizing re-runs)
 
 ```mermaid
 flowchart TD
-    F[Fetch events, singleEvents=false, paginated] --> SPLIT{classify}
+    F[Fetch source events, singleEvents=false, paginated] --> SPLIT{classify}
     SPLIT -->|has recurrence| MASTERS[recurring masters]
     SPLIT -->|has recurringEventId| EXC[recurrence exceptions]
     SPLIT -->|neither| SINGLES[single events]
-    MASTERS & SINGLES --> DEDUP{source id already in<br/>destination?<br/>extendedProperties lookup}
-    DEDUP -->|yes| SKIP[skip — idempotent re-run]
-    DEDUP -->|no| CREATE[insert into destination<br/>sendUpdates=none by default]
+    MASTERS & SINGLES --> LOOKUP{source id in destination?<br/>extendedProperties lookup}
+    LOOKUP -->|no| CREATE[insert into destination<br/>sendUpdates=none by default]
+    LOOKUP -->|yes, fingerprint equal| SKIP[skip — content unchanged]
+    LOOKUP -->|yes, fingerprint differs| UPDATE[patch destination event<br/>full field set, re-apply exceptions]
     CREATE --> MAPID[record old id → new id]
     MAPID --> EXC2[for each exception of that master:<br/>find instance by originalStartTime,<br/>patch it — or cancel if status=cancelled]
     EXC --> EXC2
-    CREATE & SKIP & EXC2 --> REPORT[MigrationResult:<br/>created / skipped / failed]
+    UPDATE --> EXC2
+    LOOKUP2[destination events with a calmove marker<br/>whose source id vanished from the source] --> DELETE[delete from destination]
+    CREATE & SKIP & UPDATE & EXC2 & DELETE --> REPORT[MigrationResult:<br/>created / updated / deleted / skipped / failed]
 ```
 
 Key behaviors:
 
-- **Idempotency** — every created event carries
-  `extendedProperties.private["calmove-source-id"] = <old event id>`. Re-running the migration
-  skips already-migrated events, so interrupted runs can simply be resumed.
+- **Synchronizing idempotency** — every created/updated event carries two private markers:
+  `extendedProperties.private["calmove-source-id"] = <old event id>` and
+  `["calmove-fingerprint"] = sha256(<canonical serialization of the mapped event and its
+  exceptions>)`. A re-run compares the fingerprint recomputed from the *source* against the
+  stored one:
+  - **unchanged** → skipped, the destination copy is not touched;
+  - **changed** → the destination event is patched in place (full field set, including
+    clearing attendees/recurrence removed at the source; a fresh Meet conference is *not*
+    re-requested) and its exceptions are re-applied;
+  - **new** → created as before;
+  - **deleted at the source** → the destination copy (identified by its `calmove-source-id`
+    marker, within the same date range) is deleted. Events the user created directly in the
+    destination calendar carry no marker and are never touched.
+  Events migrated by pre-fingerprint versions of CalMove are updated once (their fingerprint
+  is unknown), then skip normally. Interrupted runs can simply be resumed.
+- **Organizer distinction & invitation forwarding** — events are partitioned by
+  `organizer.self`:
+  - **Owned events** (user is the organizer) go through the create/update/delete sync above —
+    the user rightfully re-creates them, including rooms and a fresh Meet conference.
+  - **Invited events** (someone else organizes) are **never copied** — a copy would re-book
+    rooms and fork the organizer's meeting. Instead CalMove *forwards the invitation*: it
+    appends the new account's primary address to the guest list of the user's own copy of the
+    event in the old calendar (the API equivalent of "Add guests"), so the new account becomes
+    a real attendee of the organizer's live event — rooms, Meet link, and future organizer
+    edits included. Idempotent by membership: if the new address is already on the guest
+    list, the event is skipped and never touched again (a later manual RSVP change is
+    respected). Right after a successful forward, the new account's RSVP is set to **mirror
+    the old account's response** (accepted/tentative/declined; an unanswered invite stays
+    unanswered). Requires the organizer's `guestsCanInviteOthers` (Google default: on);
+    otherwise the event lands in the failure report. Shadow copies created by
+    pre-forwarding CalMove versions carry the marker but no longer match an owned source
+    event, so the deletion pass cleans them up automatically.
 - **Recurrences** — masters are migrated with their verbatim `RRULE`/`RDATE`/`EXDATE` lines.
   Modified/cancelled occurrences (exceptions) are then applied by patching the matching instance
   (`originalStartTime`) of the newly created master.
@@ -230,9 +262,12 @@ Key behaviors:
 
 - **OAuth 2.0 installed-app loopback flow** (`http://127.0.0.1:<random port>`) in the *system*
   browser with **PKCE** — no embedded webviews, no password handling, ever.
-- **Least-privilege scopes**: source login uses `calendar.readonly` only; destination login uses
-  `calendar.events` + `calendar.readonly` (calendar listing). The tool is physically unable to
-  modify the old workspace.
+- **Least-privilege scopes**: source login uses `calendar.readonly` +
+  `calendar.events.owned` — read everything, but write only to calendars the user owns,
+  used for exactly one operation: appending the new address to an invited event's guest
+  list (§6 forwarding). Destination login uses `calendar.events` + `calendar.readonly`
+  (calendar listing). The tool can never touch other people's calendars in the old
+  workspace.
 - **Token storage**: CLI mode puts refresh/access tokens into the OS keychain via `keyring`
   (macOS Keychain, Windows Credential Manager) — never plaintext files; `calmove logout` wipes
   them. Web mode (§10) holds tokens only in server RAM, scoped to one browser session.

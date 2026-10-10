@@ -29,6 +29,7 @@ def _event(event_id: str) -> CalendarEvent:
         start=EventTime(date_time=datetime(2026, 1, 5, 9, 0, tzinfo=UTC)),
         end=EventTime(date_time=datetime(2026, 1, 5, 10, 0, tzinfo=UTC)),
         summary="standup",
+        is_organizer=True,
     )
 
 
@@ -44,6 +45,11 @@ class SourceGateway:
     def fetch_events(self, calendar_id: str, date_range: DateRange) -> list[CalendarEvent]:
         return list(self.events)
 
+    def forward_invitation(
+        self, calendar_id: str, event: CalendarEvent, email: str, *, send_updates: str
+    ) -> None:
+        raise AssertionError("no forwards in these fixtures")
+
 
 class DestinationGateway:
     """CalendarWriter fake with calendars and recorded writes."""
@@ -51,16 +57,36 @@ class DestinationGateway:
     def __init__(self, calendars: Sequence[Calendar]) -> None:
         self.calendars = list(calendars)
         self.created: list[tuple[str, CalendarEvent, str]] = []
+        self.responses: list[tuple[str, str, str]] = []
 
     def list_calendars(self) -> list[Calendar]:
         return list(self.calendars)
 
-    def migrated_source_ids(self, calendar_id: str) -> set[str]:
-        return set()
+    def migrated_events(self, calendar_id: str, date_range: DateRange) -> dict[str, object]:
+        return {}
 
-    def create_event(self, calendar_id: str, event: CalendarEvent, *, send_updates: str) -> str:
+    def create_event(
+        self, calendar_id: str, event: CalendarEvent, *, fingerprint: str, send_updates: str
+    ) -> str:
         self.created.append((calendar_id, event, send_updates))
         return f"new-{event.id}"
+
+    def update_event(
+        self,
+        calendar_id: str,
+        destination_id: str,
+        event: CalendarEvent,
+        *,
+        fingerprint: str,
+        send_updates: str,
+    ) -> None:
+        raise AssertionError("no updates in these fixtures")
+
+    def delete_event(self, calendar_id: str, destination_id: str, *, send_updates: str) -> None:
+        raise AssertionError("no deletes in these fixtures")
+
+    def respond_to_invitation(self, event_id: str, email: str, response_status: str) -> None:
+        self.responses.append((event_id, email, response_status))
 
     def apply_exception(
         self,
@@ -257,7 +283,10 @@ class TestWizardFlow:
         client = harness.client()
         _advance_to_plan(client, harness)
         (src_scopes, *_), (dst_scopes, *_) = harness.oauth.exchanged
-        assert src_scopes == ("https://www.googleapis.com/auth/calendar.readonly",)
+        assert src_scopes == (
+            "https://www.googleapis.com/auth/calendar.readonly",
+            "https://www.googleapis.com/auth/calendar.events.owned",
+        )
         assert "https://www.googleapis.com/auth/calendar.events" in dst_scopes
 
     def test_readonly_destination_calendar_is_rejected(self) -> None:

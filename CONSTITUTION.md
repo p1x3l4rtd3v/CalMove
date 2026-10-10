@@ -55,8 +55,10 @@ MAY) are normative. See `docs/SPECIFICATION.md` for the full technical specifica
 
 ## Article 6 — Security
 
-1. OAuth scopes MUST be least-privilege: the source login uses `calendar.readonly` only; the
-   destination login uses `calendar.events` + `calendar.readonly`.
+1. OAuth scopes MUST be least-privilege: the source login uses `calendar.readonly` plus
+   `calendar.events.owned`, whose write access MUST be used solely to append the new
+   account's address to the guest list of invited events (invitation forwarding, spec §6);
+   the destination login uses `calendar.events` + `calendar.readonly`.
 2. CLI mode: tokens MUST be stored only in the OS keyring (service `calmove`) — never in files.
    Web mode: tokens MUST exist only in server process memory, bound to one browser session,
    and MUST NOT be written to disk, database, or logs; they are erased when the session ends

@@ -13,8 +13,11 @@ Mirrors `docs/SPECIFICATION.md` §7:
   authorization-code flow with PKCE and `access_type=online`, so no refresh token is ever
   issued. No embedded webviews, no password handling.
 - **Least-privilege scopes**: the source workspace login uses
-  `https://www.googleapis.com/auth/calendar.readonly` only — CalMove is physically unable to
-  modify the old workspace. The destination login uses `calendar.events` + `calendar.readonly`.
+  `https://www.googleapis.com/auth/calendar.readonly` plus `calendar.events.owned`, whose
+  write access is confined to calendars the user owns and used for exactly one operation:
+  appending the new address to an invited event's guest list (invitation forwarding).
+  CalMove can never touch other people's calendars in the old workspace. The destination
+  login uses `calendar.events` + `calendar.readonly`.
 - **Token storage**: CLI mode stores refresh/access tokens in the OS keyring (macOS Keychain,
   Windows Credential Manager) under the service name `calmove` — never in plaintext files;
   `calmove logout` deletes them. Web mode keeps tokens only in server process memory, bound

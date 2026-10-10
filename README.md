@@ -19,7 +19,7 @@ architectural rules: [CONSTITUTION.md](CONSTITUTION.md)
      a project.
   2. **APIs & Services → Library** → enable the **Google Calendar API**.
   3. **APIs & Services → OAuth consent screen** → configure it (internal or testing is fine)
-     and add the scopes `calendar.readonly` and `calendar.events`.
+     and add the scopes `calendar.readonly`, `calendar.events.owned`, and `calendar.events`.
   4. **APIs & Services → Credentials → Create credentials → OAuth client ID** → application
      type **Desktop app**.
   5. Download the resulting `client_secret.json`. Keep it out of the repo (it is gitignored).
@@ -70,8 +70,12 @@ Room map example (`rooms.json`):
 
 Unmapped rooms are kept verbatim and flagged in the report.
 
-Re-running a migration is safe: created events carry a `calmove-source-id` marker, so
-already-migrated events are skipped (interrupted runs can simply be resumed).
+Re-running a migration **synchronizes**: events carry a `calmove-source-id` marker and a
+content fingerprint, so a re-run skips unchanged events, updates changed ones in place,
+deletes destination copies whose source event is gone, and creates new ones. Events you were
+merely *invited to* are never copied — CalMove forwards the invitation to your new address
+(and mirrors your RSVP), so the new account joins the organizer's live event. Interrupted
+runs can simply be resumed.
 
 ### Logout
 
@@ -112,7 +116,7 @@ Run it locally without Docker via `uv run calmove-web`.
 | Item | Behavior |
 |---|---|
 | Google Meet links | Cannot be transferred across workspaces. CalMove requests a fresh Meet conference on the new event and appends the old link to the description for reference. |
-| Organizer | The migrating user becomes organizer of the new events (API constraint). |
+| Organizer | The migrating user becomes organizer of re-created events they owned. Invited events are forwarded, not copied, so the original organizer stays in charge. Forwarding needs the organizer's "guests can invite others" setting (Google default: on). |
 | Attendee RSVP status | Sent best-effort; Google may reset it to `needsAction`. |
 | Shared calendars | Destination write requires `writer`/`owner` access role (validated before migration). |
 

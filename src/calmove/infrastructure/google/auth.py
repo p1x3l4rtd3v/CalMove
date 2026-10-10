@@ -11,7 +11,13 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 
-SOURCE_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+SOURCE_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.readonly",
+    # Write access confined to calendars the user owns; used for exactly one
+    # operation: appending the new address to an invited event's guest list
+    # (invitation forwarding, Constitution art. 6.1).
+    "https://www.googleapis.com/auth/calendar.events.owned",
+]
 DESTINATION_SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.readonly",

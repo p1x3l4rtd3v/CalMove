@@ -1,9 +1,18 @@
 """Abstract ports the use case depends on; implemented by infrastructure/CLI."""
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from calmove.domain.date_range import DateRange
 from calmove.domain.model import Calendar, CalendarEvent
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MigratedEvent:
+    """A destination event previously created by CalMove (identified by its marker)."""
+
+    destination_id: str
+    fingerprint: str | None  # None: migrated by a pre-fingerprint version → update once
 
 
 class CalendarReader(Protocol):
@@ -19,9 +28,27 @@ class CalendarWriter(Protocol):
 
     def list_calendars(self) -> list[Calendar]: ...
 
-    def migrated_source_ids(self, calendar_id: str) -> set[str]: ...
+    def migrated_events(
+        self, calendar_id: str, date_range: DateRange
+    ) -> dict[str, MigratedEvent]: ...
 
-    def create_event(self, calendar_id: str, event: CalendarEvent, *, send_updates: str) -> str: ...
+    def create_event(
+        self, calendar_id: str, event: CalendarEvent, *, fingerprint: str, send_updates: str
+    ) -> str: ...
+
+    def update_event(
+        self,
+        calendar_id: str,
+        destination_id: str,
+        event: CalendarEvent,
+        *,
+        fingerprint: str,
+        send_updates: str,
+    ) -> None: ...
+
+    def delete_event(self, calendar_id: str, destination_id: str, *, send_updates: str) -> None: ...
+
+    def respond_to_invitation(self, event_id: str, email: str, response_status: str) -> None: ...
 
     def apply_exception(
         self,
@@ -33,10 +60,24 @@ class CalendarWriter(Protocol):
     ) -> None: ...
 
 
+class InviteForwarder(Protocol):
+    """Forwards invitations on the *source* workspace (the one write it may perform)."""
+
+    def forward_invitation(
+        self, calendar_id: str, event: CalendarEvent, email: str, *, send_updates: str
+    ) -> None: ...
+
+
 class MigrationReporter(Protocol):
     """Progress sink for the migration run."""
 
     def event_created(self, event: CalendarEvent) -> None: ...
+
+    def event_forwarded(self, event: CalendarEvent) -> None: ...
+
+    def event_updated(self, event: CalendarEvent) -> None: ...
+
+    def event_deleted(self, source_id: str) -> None: ...
 
     def event_skipped(self, event: CalendarEvent) -> None: ...
 

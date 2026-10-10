@@ -185,10 +185,17 @@ class TestConferenceLink:
 
 
 class TestEventToApi:
-    def test_omits_id_and_organizer(self) -> None:
+    def test_omits_id_and_keeps_only_organizer_self_marker(self) -> None:
         source = {**TIMED_PAYLOAD, "organizer": {"email": "owner@old.example", "self": True}}
         payload = event_to_api(event_from_api(source))
         assert "id" not in payload
+        # organizer.self survives purely for round-trip fidelity (Google ignores it
+        # on insert); the organizer's e-mail address is never carried over.
+        assert payload["organizer"] == {"self": True}
+
+    def test_invited_event_emits_no_organizer(self) -> None:
+        source = {**TIMED_PAYLOAD, "organizer": {"email": "boss@old.example"}}
+        payload = event_to_api(event_from_api(source))
         assert "organizer" not in payload
 
     def test_stamps_source_id(self) -> None:

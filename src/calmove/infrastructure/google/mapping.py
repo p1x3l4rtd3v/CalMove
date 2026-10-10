@@ -7,6 +7,7 @@ from typing import Any
 from calmove.domain.model import Attendee, Calendar, CalendarEvent, EventTime, Reminder
 
 SOURCE_ID_KEY = "calmove-source-id"
+FINGERPRINT_KEY = "calmove-fingerprint"
 _MIGRATION_NOTE = "\n\n[Migrated by CalMove — original meeting link: {link}]"
 
 
@@ -66,6 +67,7 @@ def event_from_api(payload: dict[str, Any]) -> CalendarEvent:
         recurring_event_id=payload.get("recurringEventId"),
         original_start=_time_from_api(original_start) if original_start else None,
         status=payload.get("status", "confirmed"),
+        is_organizer=bool((payload.get("organizer") or {}).get("self", False)),
         visibility=payload.get("visibility", "default"),
         transparency=payload.get("transparency", "opaque"),
         reminders=tuple(
@@ -103,7 +105,11 @@ def _attendee_to_api(attendee: Attendee) -> dict[str, Any]:
 
 
 def event_to_api(
-    event: CalendarEvent, *, source_id: str | None = None, request_meet: bool = False
+    event: CalendarEvent,
+    *,
+    source_id: str | None = None,
+    fingerprint: str | None = None,
+    request_meet: bool = False,
 ) -> dict[str, Any]:
     description = event.description
     payload: dict[str, Any] = {
@@ -127,8 +133,16 @@ def event_to_api(
         payload["recurringEventId"] = event.recurring_event_id
     if event.original_start is not None:
         payload["originalStartTime"] = _time_to_api(event.original_start)
+    if event.is_organizer:
+        # Ignored by Google on insert; kept so from_api(to_api(e)) round-trips.
+        payload["organizer"] = {"self": True}
+    private: dict[str, str] = {}
     if source_id is not None:
-        payload["extendedProperties"] = {"private": {SOURCE_ID_KEY: source_id}}
+        private[SOURCE_ID_KEY] = source_id
+    if fingerprint is not None:
+        private[FINGERPRINT_KEY] = fingerprint
+    if private:
+        payload["extendedProperties"] = {"private": private}
     if request_meet and event.conference_link is not None:
         payload["conferenceData"] = {
             "createRequest": {

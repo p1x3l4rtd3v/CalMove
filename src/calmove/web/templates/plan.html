@@ -3,7 +3,10 @@
 <h2>Migration plan (dry run — nothing has been written)</h2>
 <table>
   <tr><th>Would create</th><td>{{ plan.created }}</td></tr>
-  <tr><th>Already migrated (skipped)</th><td>{{ plan.skipped }}</td></tr>
+  <tr><th>Would update (changed at source)</th><td>{{ plan.updated }}</td></tr>
+  <tr><th>Would delete (gone from source)</th><td>{{ plan.deleted }}</td></tr>
+  <tr><th>Would forward (invited events)</th><td>{{ plan.forwarded }}</td></tr>
+  <tr><th>Skip (unchanged)</th><td>{{ plan.skipped }}</td></tr>
   <tr><th>Problems</th><td>{{ plan.failed | length }}</td></tr>
 </table>
 {% if plan.unmapped_rooms %}
@@ -13,7 +16,7 @@
 {% if plan.failed %}
 <ul class="error">{% for event_id, msg in plan.failed %}<li>{{ event_id }}: {{ msg }}</li>{% endfor %}</ul>
 {% endif %}
-{% if plan.created %}
+{% if plan.created or plan.updated or plan.deleted or plan.forwarded %}
 <form method="post" action="{{ url_for('migrate') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <label>Type <strong>migrate</strong> to start for real:
@@ -21,7 +24,7 @@
   <button type="submit">Migrate</button>
 </form>
 {% else %}
-<p>Nothing to migrate.</p>
+<p>Everything is already in sync — nothing to do.</p>
 <form method="post" action="{{ url_for('finish') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <button type="submit">Finish</button>

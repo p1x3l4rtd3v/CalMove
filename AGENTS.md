@@ -18,10 +18,12 @@ Clean architecture with a strict inward dependency rule — enforce it in every 
 
 Flow (CLI): wizard authenticates both workspaces (OAuth loopback, tokens in OS keyring) →
 `GoogleCalendarGateway` fetches source events (`singleEvents=False`, paginated) →
-`MigrateCalendarUseCase` partitions recurring masters/singles vs. recurrence exceptions, skips
-already-migrated events (idempotency via `extendedProperties.private["calmove-source-id"]`),
-creates masters first, then patches exception instances by `originalStartTime`. Failures never
-abort the run; they land in `MigrationResult.failed`.
+`MigrateCalendarUseCase` partitions events: recurrence exceptions attach to their masters;
+owned top-level events sync via a stored content fingerprint
+(`extendedProperties.private["calmove-source-id"]`/`["calmove-fingerprint"]`: unchanged →
+skip, changed → update, gone → delete); invited events are forwarded to the new account
+(guest-list append + RSVP mirror) instead of copied. Failures never abort the run; they
+land in `MigrationResult.failed`.
 
 The application layer talks only to `Protocol`s in `src/calmove/application/ports.py`
 (`CalendarReader`, `CalendarWriter`, `MigrationReporter`). Never import Google SDK types inside
@@ -76,7 +78,7 @@ All five checks (format, lint, mypy, pytest, pip-audit) are CI merge gates (`.gi
 - **uv** is the package manager; do not introduce pip/poetry workflows. Build backend: hatchling, src layout.
 - Python 3.12 pinned via `.python-version`.
 - Secrets never enter the repo: `client_secret*.json`, `token*.json`, `rooms*.json` are gitignored. Tokens live only in the OS keyring (service `calmove`, roles `source`/`destination`).
-- Source workspace scope is read-only (`calendar.readonly`); destination adds `calendar.events`. Never broaden scopes.
+- Source workspace scopes: `calendar.readonly` + `calendar.events.owned` (write used solely for invitation forwarding, Constitution art. 6.1); destination adds `calendar.events`. Never broaden scopes further.
 
 ## Testing & QA
 - pytest, offline-only: no live Google API calls in tests or CI. Exercise the use case against `FakeReader`/`FakeWriter`/`RecordingReporter` from `tests/conftest.py`.

@@ -62,6 +62,7 @@ class CalendarEvent:
     recurring_event_id: str | None = None
     original_start: EventTime | None = None
     status: str = "confirmed"
+    is_organizer: bool = False
     visibility: str = "default"
     transparency: str = "opaque"
     reminders: tuple[Reminder, ...] = ()

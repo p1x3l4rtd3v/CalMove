@@ -127,6 +127,15 @@ class _NullReporter:
     def event_created(self, event: CalendarEvent) -> None:
         pass
 
+    def event_forwarded(self, event: CalendarEvent) -> None:
+        pass
+
+    def event_updated(self, event: CalendarEvent) -> None:
+        pass
+
+    def event_deleted(self, source_id: str) -> None:
+        pass
+
     def event_skipped(self, event: CalendarEvent) -> None:
         pass
 
@@ -250,10 +259,13 @@ def create_app(
         gateway = make_gateway(credentials)
         if role == "source":
             session.source = gateway
+            session.forwarder = gateway
             session.source_calendars = list(gateway.list_calendars())
+            session.source_address = _primary_address(session.source_calendars)
         else:
             session.destination = gateway
             session.destination_calendars = list(gateway.list_calendars())
+            session.forward_address = _primary_address(session.destination_calendars)
         return redirect(url_for("pick_calendar", role=role))
 
     @app.route("/calendars/<role>", methods=["GET", "POST"])
@@ -335,7 +347,9 @@ def create_app(
             session.status = "running"
         source, destination = _gateways(session)
         run_request = _build_request(session, config, dry_run=False)
-        use_case = MigrateCalendarUseCase(source, destination, SessionReporter(session))
+        use_case = MigrateCalendarUseCase(
+            source, destination, SessionReporter(session), forwarder=session.forwarder
+        )
 
         def run() -> None:
             try:
@@ -362,6 +376,9 @@ def create_app(
                 "progress.html",
                 status=session.status,
                 created=session.progress_created,
+                forwarded=session.progress_forwarded,
+                updated=session.progress_updated,
+                deleted=session.progress_deleted,
                 skipped=session.progress_skipped,
                 failed=list(session.progress_failed),
                 error=session.error,
@@ -412,6 +429,11 @@ def _gateways(session: WebSession) -> tuple[CalendarReader, CalendarWriter]:
     return session.source, session.destination
 
 
+def _primary_address(calendars: list[Calendar]) -> str | None:
+    """The account's primary calendar id is its e-mail address."""
+    return next((c.id for c in calendars if c.primary), None)
+
+
 def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> MigrationRequest:
     if (
         session.source_calendar is None
@@ -426,6 +448,8 @@ def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> 
         dry_run=dry_run,
         send_updates="none",
         room_map=config.room_map,
+        source_address=session.source_address,
+        forward_address=session.forward_address,
     )
 
 

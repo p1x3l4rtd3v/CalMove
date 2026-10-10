@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from calmove.application.migrate_calendar import MigrationResult
-from calmove.application.ports import CalendarReader, CalendarWriter
+from calmove.application.ports import CalendarReader, CalendarWriter, InviteForwarder
 from calmove.domain.date_range import DateRange
 from calmove.domain.model import Calendar, CalendarEvent
 
@@ -32,6 +32,9 @@ class WebSession:
     oauth_verifier: str | None = None
     source: CalendarReader | None = None
     destination: CalendarWriter | None = None
+    forwarder: InviteForwarder | None = None
+    source_address: str | None = None
+    forward_address: str | None = None
     source_calendars: list[Calendar] = field(default_factory=list)
     destination_calendars: list[Calendar] = field(default_factory=list)
     source_calendar: Calendar | None = None
@@ -40,6 +43,9 @@ class WebSession:
     plan: MigrationResult | None = None
     status: str = "setup"  # setup | running | done | failed
     progress_created: int = 0
+    progress_forwarded: int = 0
+    progress_updated: int = 0
+    progress_deleted: int = 0
     progress_skipped: int = 0
     progress_failed: list[tuple[str, str]] = field(default_factory=list)
     report: MigrationResult | None = None
@@ -56,6 +62,18 @@ class SessionReporter:
     def event_created(self, event: CalendarEvent) -> None:
         with self._session.lock:
             self._session.progress_created += 1
+
+    def event_forwarded(self, event: CalendarEvent) -> None:
+        with self._session.lock:
+            self._session.progress_forwarded += 1
+
+    def event_updated(self, event: CalendarEvent) -> None:
+        with self._session.lock:
+            self._session.progress_updated += 1
+
+    def event_deleted(self, source_id: str) -> None:
+        with self._session.lock:
+            self._session.progress_deleted += 1
 
     def event_skipped(self, event: CalendarEvent) -> None:
         with self._session.lock:
