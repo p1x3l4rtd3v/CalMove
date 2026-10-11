@@ -6,13 +6,49 @@
   <title>CalMove</title>
   {% block head %}{% endblock %}
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
-    table { border-collapse: collapse; margin: 1rem 0; }
-    th, td { border: 1px solid #bbb; padding: .3rem .7rem; text-align: left; }
-    .error { color: #b00020; }
-    .muted { color: #666; font-size: .9rem; }
-    button { padding: .4rem 1rem; }
-    label { display: block; margin: .25rem 0; }
+    /* Nord color palette (nordtheme.com, MIT) */
+    :root {
+      --nord0: #2e3440; --nord1: #3b4252; --nord2: #434c5e; --nord3: #4c566a;
+      --nord4: #d8dee9; --nord5: #e5e9f0; --nord6: #eceff4;
+      --nord7: #8fbcbb; --nord8: #88c0d0; --nord9: #81a1c1; --nord10: #5e81ac;
+      --nord11: #bf616a; --nord12: #d08770; --nord13: #ebcb8b; --nord14: #a3be8c;
+    }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 46rem; margin: 2rem auto; padding: 0 1rem;
+      background: var(--nord0); color: var(--nord4);
+    }
+    h1 { color: var(--nord8); }
+    h2 { color: var(--nord6); }
+    a { color: var(--nord8); }
+    table {
+      border-collapse: collapse; margin: 1rem 0;
+      background: var(--nord1); border-radius: 4px;
+    }
+    th, td { border: 1px solid var(--nord3); padding: .35rem .8rem; text-align: left; }
+    th { color: var(--nord7); font-weight: 600; }
+    .error { color: var(--nord11); }
+    .muted { color: var(--nord4); opacity: .7; font-size: .9rem; }
+    form {
+      background: var(--nord1); border: 1px solid var(--nord2);
+      border-radius: 6px; padding: 1rem; margin: 1rem 0;
+    }
+    label { display: block; margin: .4rem 0; }
+    input[type="text"], input[type="date"] {
+      background: var(--nord2); color: var(--nord6);
+      border: 1px solid var(--nord3); border-radius: 4px; padding: .3rem .5rem;
+    }
+    input[type="text"]:focus, input[type="date"]:focus {
+      outline: 2px solid var(--nord8); outline-offset: 0;
+    }
+    input[type="radio"], input[type="checkbox"] { accent-color: var(--nord8); }
+    button {
+      background: var(--nord10); color: var(--nord6);
+      border: none; border-radius: 4px; padding: .45rem 1.2rem;
+      font-size: 1rem; cursor: pointer; margin-top: .5rem;
+    }
+    button:hover { background: var(--nord9); }
+    ul { line-height: 1.5; }
   </style>
 </head>
 <body>
