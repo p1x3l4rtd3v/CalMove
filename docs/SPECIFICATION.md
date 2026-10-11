@@ -319,7 +319,7 @@ Key behaviors:
 
 | Item | Behavior |
 |---|---|
-| Google Meet links | Cannot be transferred across workspaces. CalMove requests a fresh Meet conference on the new event and appends the old link to the description for reference. |
+| Google Meet links | Bound to the old Workspace and not transferable. CalMove requests a fresh Meet conference and keeps the old link in the description. Third-party conference links (Teams, Zoom, Webex) are carried over unchanged, in the description rather than the native Join field (the API does not allow fabricating third-party conference entries). |
 | Organizer | The migrating user becomes organizer of the new events (API constraint). |
 | Attendee RSVP status | Sent best-effort; Google may reset it to `needsAction`. |
 | Shared calendars | Destination write requires `writer`/`owner` access role (validated before migration). |
