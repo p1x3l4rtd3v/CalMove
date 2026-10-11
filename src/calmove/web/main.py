@@ -395,10 +395,12 @@ def create_app(
             return redirect(url_for("index"))
         with session.lock:
             report = session.report if session.status in {"done", "failed"} else None
+            placeholders: list[str] = []
             if report is not None:
                 created, forwarded, updated = report.created, report.forwarded, report.updated
                 deleted, skipped = report.deleted, report.skipped
                 failed = list(report.failed)
+                placeholders = list(report.placeholder_events)
             else:
                 created, forwarded = session.progress_created, session.progress_forwarded
                 updated, deleted = session.progress_updated, session.progress_deleted
@@ -412,6 +414,7 @@ def create_app(
                 deleted=deleted,
                 skipped=skipped,
                 failed=failed,
+                placeholders=placeholders,
                 error=session.error,
                 csrf=session.csrf_token,
             )

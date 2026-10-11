@@ -8,6 +8,7 @@ from calmove.domain.model import Attendee, Calendar, CalendarEvent, EventTime, R
 
 SOURCE_ID_KEY = "calmove-source-id"
 FINGERPRINT_KEY = "calmove-fingerprint"
+PLACEHOLDER_KEY = "calmove-placeholder"
 _MIGRATION_NOTE = "\n\n[Migrated by CalMove - original meeting link: {link}]"
 
 
@@ -111,6 +112,7 @@ def event_to_api(
     fingerprint: str | None = None,
     request_meet: bool = False,
     annotate_original_link: bool = False,
+    placeholder: bool = False,
 ) -> dict[str, Any]:
     description = event.description
     payload: dict[str, Any] = {
@@ -142,6 +144,8 @@ def event_to_api(
         private[SOURCE_ID_KEY] = source_id
     if fingerprint is not None:
         private[FINGERPRINT_KEY] = fingerprint
+    if placeholder:
+        private[PLACEHOLDER_KEY] = "true"
     if private:
         payload["extendedProperties"] = {"private": private}
     if request_meet and event.conference_link is not None:

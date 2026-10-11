@@ -13,6 +13,7 @@ from calmove.domain.errors import MigrationError
 from calmove.domain.model import Calendar, CalendarEvent, EventTime
 from calmove.infrastructure.google.mapping import (
     FINGERPRINT_KEY,
+    PLACEHOLDER_KEY,
     SOURCE_ID_KEY,
     calendar_from_api,
     event_from_api,
@@ -110,6 +111,7 @@ class GoogleCalendarGateway:
                     destination_id=destination_id,
                     fingerprint=fingerprint,
                     trusted=created_by_self and fingerprint_ok,
+                    placeholder=private.get(PLACEHOLDER_KEY) == "true",
                 )
             page_token = response.get("nextPageToken")
             if not page_token:
@@ -128,15 +130,38 @@ class GoogleCalendarGateway:
             params["timeMax"] = _rfc3339(date_range.time_max)
         return params
 
+    def has_event(self, calendar_id: str, event_id: str) -> bool:
+        """Whether the (forwarded) event is visible in the destination calendar.
+
+        A cancelled copy counts as not visible: Google materializes declined or
+        removed invitations as cancelled stubs.
+        """
+        try:
+            payload = self._service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        except HttpError as error:
+            if error.status_code == 404:
+                return False
+            raise MigrationError(
+                f"Google Calendar API error ({error.status_code}): {error.reason}"
+            ) from error
+        return bool(payload.get("status") != "cancelled")
+
     def create_event(
-        self, calendar_id: str, event: CalendarEvent, *, fingerprint: str, send_updates: str
+        self,
+        calendar_id: str,
+        event: CalendarEvent,
+        *,
+        fingerprint: str,
+        send_updates: str,
+        placeholder: bool = False,
     ) -> str:
         body = event_to_api(
             event,
             source_id=event.id,
             fingerprint=fingerprint,
-            request_meet=True,
-            annotate_original_link=True,
+            request_meet=not placeholder,
+            annotate_original_link=not placeholder,
+            placeholder=placeholder,
         )
         created = self._execute(
             self._service.events().insert(
@@ -156,6 +181,7 @@ class GoogleCalendarGateway:
         *,
         fingerprint: str,
         send_updates: str,
+        placeholder: bool = False,
     ) -> None:
         """Patch the full migrated field set onto the existing destination event.
 
@@ -164,7 +190,11 @@ class GoogleCalendarGateway:
         sent (empty lists clear fields removed at the source).
         """
         body = event_to_api(
-            event, source_id=event.id, fingerprint=fingerprint, annotate_original_link=True
+            event,
+            source_id=event.id,
+            fingerprint=fingerprint,
+            annotate_original_link=not placeholder,
+            placeholder=placeholder,
         )
         body.setdefault("attendees", [])
         body.setdefault("recurrence", [])

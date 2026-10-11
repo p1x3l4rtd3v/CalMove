@@ -37,6 +37,7 @@ def synced(
     destination_id: str | None = None,
     trusted: bool = True,
     duplicate_ids: tuple[str, ...] = (),
+    placeholder: bool = False,
 ) -> dict[str, MigratedEvent]:
     """A ``migrated_events`` entry for ``event``.
 
@@ -51,6 +52,7 @@ def synced(
             fingerprint=stored,
             trusted=trusted,
             duplicate_ids=duplicate_ids,
+            placeholder=placeholder,
         )
     }
 
@@ -78,11 +80,14 @@ class FakeWriter:
         self,
         migrated: Mapping[str, MigratedEvent] | None = None,
         fail_ids: set[str] | frozenset[str] | tuple[str, ...] = (),
+        invisible_ids: set[str] | frozenset[str] | tuple[str, ...] = (),
     ) -> None:
         self.migrated = dict(migrated or {})
         self.fail_ids = set(fail_ids)
+        self.invisible_ids = set(invisible_ids)
         self.created: list[tuple[str, CalendarEvent, str]] = []
         self.created_fingerprints: dict[str, str] = {}
+        self.placeholders: list[tuple[str, str]] = []  # (operation, event id)
         self.updated: list[tuple[str, str, CalendarEvent, str, str]] = []
         self.deleted: list[tuple[str, str, str]] = []
         self.applied: list[tuple[str, str, CalendarEvent, str]] = []
@@ -95,13 +100,26 @@ class FakeWriter:
         self.migrated_calls += 1
         return dict(self.migrated)
 
+    def has_event(self, calendar_id: str, event_id: str) -> bool:
+        if f"visibility:{event_id}" in self.fail_ids:
+            raise RuntimeError(f"boom:visibility:{event_id}")
+        return event_id not in self.invisible_ids
+
     def create_event(
-        self, calendar_id: str, event: CalendarEvent, *, fingerprint: str, send_updates: str
+        self,
+        calendar_id: str,
+        event: CalendarEvent,
+        *,
+        fingerprint: str,
+        send_updates: str,
+        placeholder: bool = False,
     ) -> str:
         if event.id in self.fail_ids:
             raise RuntimeError(f"boom:{event.id}")
         self.created.append((calendar_id, event, send_updates))
         self.created_fingerprints[event.id] = fingerprint
+        if placeholder:
+            self.placeholders.append(("create", event.id))
         return f"new-{event.id}"
 
     def update_event(
@@ -112,10 +130,13 @@ class FakeWriter:
         *,
         fingerprint: str,
         send_updates: str,
+        placeholder: bool = False,
     ) -> None:
         if event.id in self.fail_ids:
             raise RuntimeError(f"boom:{event.id}")
         self.updated.append((calendar_id, destination_id, event, fingerprint, send_updates))
+        if placeholder:
+            self.placeholders.append(("update", event.id))
 
     def delete_event(self, calendar_id: str, destination_id: str, *, send_updates: str) -> None:
         if destination_id in self.fail_ids:
@@ -223,12 +244,13 @@ def migrate() -> Any:
         *,
         migrated: Mapping[str, MigratedEvent] | None = None,
         fail_ids: set[str] | tuple[str, ...] = (),
+        invisible_ids: set[str] | tuple[str, ...] = (),
         forwarder: FakeForwarder | None = None,
         responder: FakeResponder | None = None,
         **request_overrides: Any,
     ) -> tuple[Any, FakeWriter, RecordingReporter]:
         reader = FakeReader(events=events)
-        writer = FakeWriter(migrated=migrated, fail_ids=fail_ids)
+        writer = FakeWriter(migrated=migrated, fail_ids=fail_ids, invisible_ids=invisible_ids)
         rec = RecordingReporter()
         request = MigrationRequest(
             source_calendar_id="src-cal",

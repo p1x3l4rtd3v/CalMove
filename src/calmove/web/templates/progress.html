@@ -20,6 +20,12 @@
 {% if failed %}
 <ul class="error">{% for event_id, msg in failed %}<li>{{ event_id }}: {{ msg }}</li>{% endfor %}</ul>
 {% endif %}
+{% if placeholders %}
+<p class="muted">Some invited events could not join the organizer's original meeting
+   automatically (external organizer). They were copied as read-only placeholders;
+   ask the organizer to invite your new address:</p>
+<ul>{% for event_id in placeholders %}<li>{{ event_id }}</li>{% endfor %}</ul>
+{% endif %}
 {% if status != "running" %}
 <form method="post" action="{{ url_for('finish') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">

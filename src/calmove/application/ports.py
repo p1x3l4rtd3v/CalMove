@@ -15,6 +15,7 @@ class MigratedEvent:
     fingerprint: str | None  # None: migrated by a pre-fingerprint version → update once
     trusted: bool = True  # created by this user AND marker payload is well-formed
     duplicate_ids: tuple[str, ...] = ()  # other destination events carrying the same marker
+    placeholder: bool = False  # read-only copy of an invited event (delivery fallback)
 
 
 class CalendarReader(Protocol):
@@ -34,8 +35,16 @@ class CalendarWriter(Protocol):
         self, calendar_id: str, date_range: DateRange
     ) -> dict[str, MigratedEvent]: ...
 
+    def has_event(self, calendar_id: str, event_id: str) -> bool: ...
+
     def create_event(
-        self, calendar_id: str, event: CalendarEvent, *, fingerprint: str, send_updates: str
+        self,
+        calendar_id: str,
+        event: CalendarEvent,
+        *,
+        fingerprint: str,
+        send_updates: str,
+        placeholder: bool = False,
     ) -> str: ...
 
     def update_event(
@@ -46,6 +55,7 @@ class CalendarWriter(Protocol):
         *,
         fingerprint: str,
         send_updates: str,
+        placeholder: bool = False,
     ) -> None: ...
 
     def delete_event(self, calendar_id: str, destination_id: str, *, send_updates: str) -> None: ...

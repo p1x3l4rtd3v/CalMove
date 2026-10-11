@@ -243,9 +243,27 @@ Key behaviors:
     calendar (calendars don't RSVP; people do), the new account's RSVP is set to mirror
     the old account's response (accepted/tentative/declined; an unanswered invite stays
     unanswered). Requires the organizer's `guestsCanInviteOthers` (Google default: on);
-    otherwise the event lands in the failure report. Shadow copies created by
-    pre-forwarding CalMove versions carry the marker but no longer match an owned source
-    event, so the deletion pass cleans them up automatically.
+    otherwise the event lands in the failure report.
+  - **Delivery verification and placeholder fallback**: a forward only reaches the
+    organizer's live event when the organizer is on Google Calendar and propagation is
+    allowed. External organizers on Microsoft 365/Exchange receive invitations as iCal
+    e-mail interop; a guest added to the user's Google copy never reaches them, so the
+    new account would silently see nothing. After ensuring guest membership, CalMove
+    therefore checks whether the event is visible in the chosen destination calendar:
+    - visible: the real invitation arrived; any placeholder for this event is deleted;
+    - not visible: CalMove upserts a **placeholder copy** in the destination, a read-only
+      rendition of the event without attendees, rooms, or a Meet request (nothing is
+      double-booked, nobody is notified), marked with
+      `extendedProperties.private["calmove-placeholder"]` plus the usual source-id and
+      fingerprint markers, and with a description note that replies must go through the
+      organizer's original invitation. Placeholders follow sync rules (updated when the
+      source copy changes, deleted when the source event disappears) and are replaced
+      automatically by the real invitation once it materializes. The durable fix for live
+      attendance is the organizer inviting the new address; the report says so for each
+      placeholder.
+    Shadow copies created by pre-forwarding CalMove versions carry the marker but no
+    placeholder flag and no longer match an owned source event, so the deletion pass
+    cleans them up automatically.
 - Recurrences: masters are migrated with their verbatim `RRULE`/`RDATE`/`EXDATE` lines.
   Modified/cancelled occurrences (exceptions) are then applied by patching the matching instance
   (`originalStartTime`) of the newly created master.

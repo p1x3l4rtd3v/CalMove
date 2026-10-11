@@ -877,3 +877,153 @@ class TestResendInvitations:
         result, writer, _ = migrate([event], migrated=synced(event), send_updates="all")
         assert result.skipped == 1
         assert writer.updated == []
+
+
+class TestPlaceholderFallback:
+    """Invited events invisible in the destination (e.g. M365 organizers) get read-only copies."""
+
+    @staticmethod
+    def _invited(make_event: Any, **kw: Any) -> Any:
+        return make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="organizer@umb.example"),
+                Attendee(email="me@old.example", response_status="accepted"),
+            ),
+            **kw,
+        )
+
+    def test_invisible_forward_creates_stripped_placeholder(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        invited = self._invited(make_event, summary="Customer board", conference_link="x")
+        result, writer, reporter = migrate(
+            [invited],
+            forwarder=FakeForwarder(),
+            forward_address="me@new.example",
+            invisible_ids={"inv-1"},
+        )
+        assert result.forwarded == 1
+        assert result.created == 1
+        assert result.placeholder_events == ["inv-1"]
+        assert writer.placeholders == [("create", "inv-1")]
+        _, created, send = writer.created[0]
+        assert created.attendees == ()  # nobody is invited by a placeholder
+        assert created.conference_link is None  # no Meet request
+        assert "organizer's original invitation" in created.description
+        assert send == "none"  # placeholders never notify
+        assert [e.id for e in reporter.created] == ["inv-1"]
+
+    def test_visible_forward_creates_nothing(self, migrate: Any, make_event: Any) -> None:
+        result, writer, _ = migrate(
+            [self._invited(make_event)],
+            forwarder=FakeForwarder(),
+            forward_address="me@new.example",
+        )
+        assert result.forwarded == 1
+        assert writer.created == []
+        assert result.placeholder_events == []
+
+    def test_placeholder_in_sync_is_left_alone(self, migrate: Any, make_event: Any) -> None:
+        from dataclasses import replace
+
+        from calmove.application.migrate_calendar import _PLACEHOLDER_NOTE
+
+        invited = self._invited(make_event)
+        already = replace(
+            invited,
+            attendees=(),
+            conference_link=None,
+            description=invited.description + _PLACEHOLDER_NOTE,
+        )
+        invited_with_guest = replace(
+            invited,
+            attendees=(*invited.attendees, Attendee(email="me@new.example")),
+        )
+        result, writer, _ = migrate(
+            [invited_with_guest],
+            migrated=synced(already, placeholder=True, destination_id="dest-ph"),
+            invisible_ids={"inv-1"},
+            forward_address="me@new.example",
+        )
+        assert result.skipped == 1  # membership skip
+        assert writer.created == writer.updated == []
+        assert writer.deleted == []
+
+    def test_placeholder_updated_when_source_changes(self, migrate: Any, make_event: Any) -> None:
+        invited = self._invited(make_event, summary="Moved meeting")
+        stale = synced(invited, fingerprint="0" * 64, placeholder=True, destination_id="dest-ph")
+        result, writer, _ = migrate(
+            [invited],
+            migrated=stale,
+            invisible_ids={"inv-1"},
+            forwarder=FakeForwarder(),
+            forward_address="me@new.example",
+        )
+        assert result.updated == 1
+        assert writer.placeholders == [("update", "inv-1")]
+        assert writer.updated[0][1] == "dest-ph"
+
+    def test_placeholder_removed_when_real_invitation_arrives(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        invited = self._invited(make_event)
+        placeholder = synced(invited, placeholder=True, destination_id="dest-ph")
+        result, writer, _ = migrate(
+            [invited],
+            migrated=placeholder,
+            forwarder=FakeForwarder(),
+            forward_address="me@new.example",
+        )
+        assert result.deleted == 1
+        assert writer.deleted == [("dst-cal", "dest-ph", "none")]
+
+    def test_live_placeholder_survives_the_deletion_pass(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        invited = self._invited(make_event)
+        # Placeholder exists AND the event is still invisible: nothing may delete it.
+        from dataclasses import replace
+
+        from calmove.application.migrate_calendar import _PLACEHOLDER_NOTE
+
+        stripped = replace(
+            invited,
+            attendees=(),
+            conference_link=None,
+            description=invited.description + _PLACEHOLDER_NOTE,
+        )
+        invited_with_guest = replace(
+            invited, attendees=(*invited.attendees, Attendee(email="me@new.example"))
+        )
+        result, writer, _ = migrate(
+            [invited_with_guest],
+            migrated=synced(stripped, placeholder=True, destination_id="dest-ph"),
+            invisible_ids={"inv-1"},
+            forward_address="me@new.example",
+        )
+        assert writer.deleted == []
+        assert result.deleted == 0
+
+    def test_stale_placeholder_of_vanished_event_is_deleted(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        gone = self._invited(make_event)
+        result, writer, _ = migrate(
+            [],  # source event vanished
+            migrated=synced(gone, placeholder=True, destination_id="dest-ph"),
+        )
+        assert result.deleted == 1
+        assert writer.deleted == [("dst-cal", "dest-ph", "none")]
+
+    def test_dry_run_checks_nothing(self, migrate: Any, make_event: Any) -> None:
+        result, writer, _ = migrate(
+            [self._invited(make_event)],
+            forward_address="me@new.example",
+            invisible_ids={"inv-1"},
+            dry_run=True,
+        )
+        assert result.forwarded == 1
+        assert writer.created == []
+        assert result.placeholder_events == []

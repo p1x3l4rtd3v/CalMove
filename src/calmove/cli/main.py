@@ -109,6 +109,14 @@ def _print_details(result: MigrationResult) -> None:
         console.print("[yellow]Unmapped rooms (kept verbatim; extend your --room-map):[/yellow]")
         for room in sorted(result.unmapped_rooms):
             console.print(f"  • {_safe(room)}")
+    if result.placeholder_events:
+        console.print(
+            "[yellow]Invited events copied as read-only placeholders (the organizer "
+            "could not be reached automatically; ask them to invite your new "
+            "address):[/yellow]"
+        )
+        for event_id in result.placeholder_events:
+            console.print(f"  • {_safe(event_id)}")
     if result.failed:
         console.print("[red]Failures:[/red]")
         for event_id, message in result.failed:

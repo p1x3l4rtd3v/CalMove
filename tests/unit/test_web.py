@@ -72,8 +72,17 @@ class DestinationGateway:
     def migrated_events(self, calendar_id: str, date_range: DateRange) -> dict[str, MigratedEvent]:
         return dict(self.migrated)
 
+    def has_event(self, calendar_id: str, event_id: str) -> bool:
+        return True  # forwarded invitations are delivered in these fixtures
+
     def create_event(
-        self, calendar_id: str, event: CalendarEvent, *, fingerprint: str, send_updates: str
+        self,
+        calendar_id: str,
+        event: CalendarEvent,
+        *,
+        fingerprint: str,
+        send_updates: str,
+        placeholder: bool = False,
     ) -> str:
         self.created.append((calendar_id, event, send_updates))
         return f"new-{event.id}"
@@ -86,6 +95,7 @@ class DestinationGateway:
         *,
         fingerprint: str,
         send_updates: str,
+        placeholder: bool = False,
     ) -> None:
         self.updated.append((calendar_id, destination_id, event, send_updates))
 

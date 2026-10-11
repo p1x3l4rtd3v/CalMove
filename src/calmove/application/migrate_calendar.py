@@ -22,6 +22,11 @@ _UNTRUSTED_MARKER = (
     ", left untouched for safety"
 )
 _ANSWERED = frozenset({"accepted", "tentative", "declined"})
+_PLACEHOLDER_NOTE = (
+    "\n\n[CalMove copy: the organizer's invitation could not be transferred automatically."
+    " Replies must go through the organizer's original invitation; ask the organizer to"
+    " invite your new address.]"
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -53,6 +58,7 @@ class MigrationResult:
     skipped: int = 0
     failed: list[tuple[str, str]] = field(default_factory=list)
     unmapped_rooms: set[str] = field(default_factory=set)
+    placeholder_events: list[str] = field(default_factory=list)
 
 
 class MigrateCalendarUseCase:
@@ -104,7 +110,8 @@ class MigrateCalendarUseCase:
             )
         for event in invited:
             self._forward(request, result, event)
-        self._delete_vanished(request, result, existing, owned_ids)
+            self._ensure_visible(request, result, existing, event)
+        self._delete_vanished(request, result, existing, owned_ids, invited_ids)
         self._fail_orphans(result, exceptions_by_master, owned_ids | invited_ids)
         return result
 
@@ -209,10 +216,18 @@ class MigrateCalendarUseCase:
         result: MigrationResult,
         existing: Mapping[str, MigratedEvent],
         owned_ids: set[str],
+        invited_ids: set[str],
     ) -> None:
-        """Delete destination copies whose source event no longer exists."""
+        """Delete destination copies whose source event no longer exists.
+
+        Placeholders of still-invited events are live and managed by
+        ``_ensure_visible``; everything else carrying a marker outside the owned set
+        is stale (vanished sources, pre-forwarding shadow copies) and is removed.
+        """
         for source_id, prior in existing.items():
             if source_id in owned_ids:
+                continue
+            if prior.placeholder and source_id in invited_ids:
                 continue
             if not prior.trusted:
                 result.failed.append((source_id, _UNTRUSTED_MARKER))
@@ -294,6 +309,88 @@ class MigrateCalendarUseCase:
         self._reporter.event_forwarded(event)
         if request.mirror_rsvp:
             self._mirror_rsvp(request, result, event, forward_address)
+
+    def _ensure_visible(
+        self,
+        request: MigrationRequest,
+        result: MigrationResult,
+        existing: Mapping[str, MigratedEvent],
+        event: CalendarEvent,
+    ) -> None:
+        """Guarantee an invited event is visible in the destination calendar.
+
+        A forward only reaches the organizer's live event for Google-to-Google
+        invitations. External organizers (Microsoft 365/Exchange interop) never see
+        the added guest, so the real invitation cannot materialize; a read-only
+        placeholder copy keeps the new calendar complete until the organizer invites
+        the new address. Placeholders are replaced by the real invitation once it
+        arrives and follow the normal sync rules otherwise.
+        """
+        if request.dry_run:
+            return
+        prior = existing.get(event.id)
+        if prior is not None and prior.placeholder and not prior.trusted:
+            result.failed.append((event.id, _UNTRUSTED_MARKER))
+            self._reporter.event_failed(event, MigrationError(_UNTRUSTED_MARKER))
+            return
+        try:
+            visible = self._writer.has_event(request.destination_calendar_id, event.id)
+        except Exception as error:
+            result.failed.append((event.id, str(error)))
+            self._reporter.event_failed(event, error)
+            return
+        prior_placeholder = prior if prior is not None and prior.placeholder else None
+        if visible:
+            if prior_placeholder is not None:
+                # The real invitation materialized; the placeholder has served its purpose.
+                try:
+                    self._writer.delete_event(
+                        request.destination_calendar_id,
+                        prior_placeholder.destination_id,
+                        send_updates="none",
+                    )
+                except Exception as error:
+                    result.failed.append((event.id, str(error)))
+                else:
+                    result.deleted += 1
+                    self._reporter.event_deleted(event.id)
+            return
+        stripped = replace(
+            event,
+            attendees=(),
+            conference_link=None,
+            description=event.description + _PLACEHOLDER_NOTE,
+        )
+        fingerprint = event_fingerprint(stripped)
+        if prior_placeholder is not None and prior_placeholder.fingerprint == fingerprint:
+            return  # placeholder already in sync; membership counting happened in _forward
+        try:
+            if prior_placeholder is None:
+                self._writer.create_event(
+                    request.destination_calendar_id,
+                    stripped,
+                    fingerprint=fingerprint,
+                    send_updates="none",
+                    placeholder=True,
+                )
+                result.created += 1
+                self._reporter.event_created(event)
+            else:
+                self._writer.update_event(
+                    request.destination_calendar_id,
+                    prior_placeholder.destination_id,
+                    stripped,
+                    fingerprint=fingerprint,
+                    send_updates="none",
+                    placeholder=True,
+                )
+                result.updated += 1
+                self._reporter.event_updated(event)
+        except Exception as error:
+            result.failed.append((event.id, str(error)))
+            self._reporter.event_failed(event, error)
+            return
+        result.placeholder_events.append(event.id)
 
     def _mirror_rsvp(
         self,
