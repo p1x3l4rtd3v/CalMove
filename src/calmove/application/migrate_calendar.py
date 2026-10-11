@@ -27,6 +27,8 @@ class MigrationRequest:
     dry_run: bool = False
     send_updates: str = "none"
     room_map: Mapping[str, str] = field(default_factory=dict)
+    attendee_map: Mapping[str, str] = field(default_factory=dict)  # explicit old → new address
+    domain_map: Mapping[str, str] = field(default_factory=dict)  # old domain → new domain
     source_address: str | None = None  # old account's primary e-mail (RSVP mirroring)
     forward_address: str | None = None  # new account's primary e-mail (forward target)
 
@@ -87,8 +89,8 @@ class MigrateCalendarUseCase:
 
         for event in owned:
             exceptions = exceptions_by_master.get(event.id, [])
-            mapped_event = self._map_rooms(event, request, result)
-            mapped_exceptions = [self._map_rooms(exc, request, result) for exc in exceptions]
+            mapped_event = self._map_addresses(event, request, result)
+            mapped_exceptions = [self._map_addresses(e, request, result) for e in exceptions]
             fingerprint = event_fingerprint(mapped_event, mapped_exceptions)
             prior = existing.get(event.id)
 
@@ -281,4 +283,37 @@ class MigrateCalendarUseCase:
                 else:
                     result.unmapped_rooms.add(attendee.email)
             attendees.append(attendee)
+        return replace(event, attendees=tuple(attendees))
+
+    @classmethod
+    def _map_addresses(
+        cls, event: CalendarEvent, request: MigrationRequest, result: MigrationResult
+    ) -> CalendarEvent:
+        """Rooms via the room map, humans via the attendee/domain maps (spec §6)."""
+        return cls._map_attendees(cls._map_rooms(event, request, result), request)
+
+    @staticmethod
+    def _map_attendees(event: CalendarEvent, request: MigrationRequest) -> CalendarEvent:
+        if (not request.attendee_map and not request.domain_map) or not event.attendees:
+            return event
+        explicit = {old.lower(): new for old, new in request.attendee_map.items()}
+        domains = {old.lower(): new for old, new in request.domain_map.items()}
+        attendees: list[Attendee] = []
+        changed = False
+        for attendee in event.attendees:
+            if attendee.is_resource:  # rooms are governed by the room map only
+                attendees.append(attendee)
+                continue
+            new_email = explicit.get(attendee.email.lower())
+            if new_email is None and "@" in attendee.email:
+                local, _, domain = attendee.email.rpartition("@")
+                new_domain = domains.get(domain.lower())
+                if new_domain is not None:
+                    new_email = f"{local}@{new_domain}"
+            if new_email is not None and new_email.lower() != attendee.email.lower():
+                attendee = replace(attendee, email=new_email)
+                changed = True
+            attendees.append(attendee)
+        if not changed:
+            return event
         return replace(event, attendees=tuple(attendees))

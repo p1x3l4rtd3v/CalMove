@@ -543,3 +543,69 @@ class TestUnicodeContent:
         assert event_fingerprint(a) != event_fingerprint(
             make_event("evt-vn", summary="週次定例 🚀", description="議題は計画変更")
         )
+
+
+class TestAttendeeMapping:
+    @staticmethod
+    def _event_with_people(make_event: Any, event_id: str = "evt-1") -> Any:
+        return make_event(
+            event_id,
+            attendees=(
+                Attendee(email="John.Doe@old-company.com", response_status="accepted"),
+                Attendee(email="jane.roe@old-company.com", display_name="Jane", optional=True),
+                Attendee(email="partner@external.example"),
+                Attendee(email="room-1@resource.calendar.google.com", is_resource=True),
+            ),
+        )
+
+    def test_domain_rule_rewrites_humans_keeps_rooms_and_externals(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        result, writer, _ = migrate(
+            [self._event_with_people(make_event)],
+            domain_map={"old-company.com": "new-company.com"},
+        )
+        created = writer.created[0][1]
+        emails = [a.email for a in created.attendees]
+        assert emails == [
+            "John.Doe@new-company.com",
+            "jane.roe@new-company.com",
+            "partner@external.example",
+            "room-1@resource.calendar.google.com",
+        ]
+        # RSVP, display name, and optional flag survive the rewrite.
+        assert created.attendees[0].response_status == "accepted"
+        assert created.attendees[1].display_name == "Jane"
+        assert created.attendees[1].optional is True
+        assert result.unmapped_rooms == set()
+
+    def test_explicit_entry_beats_domain_rule(self, migrate: Any, make_event: Any) -> None:
+        _, writer, _ = migrate(
+            [self._event_with_people(make_event)],
+            attendee_map={"john.doe@old-company.com": "johnny@new-company.com"},
+            domain_map={"old-company.com": "new-company.com"},
+        )
+        emails = [a.email for a in writer.created[0][1].attendees]
+        assert emails[0] == "johnny@new-company.com"  # explicit (case-insensitive match)
+        assert emails[1] == "jane.roe@new-company.com"  # domain rule
+
+    def test_adding_rule_updates_previously_migrated_event_in_place(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        event = self._event_with_people(make_event)
+        # First run migrated WITHOUT the rule; now the domain rule is introduced.
+        result, writer, _ = migrate(
+            [event],
+            migrated=synced(event),
+            domain_map={"old-company.com": "new-company.com"},
+        )
+        assert result.updated == 1
+        assert result.created == result.deleted == 0
+        assert writer.updated[0][1] == "dest-evt-1"  # same destination event, patched
+        assert writer.updated[0][2].attendees[0].email == "John.Doe@new-company.com"
+
+    def test_no_rules_leave_everything_untouched(self, migrate: Any, make_event: Any) -> None:
+        event = self._event_with_people(make_event)
+        result, writer, _ = migrate([event], migrated=synced(event))
+        assert result.skipped == 1
+        assert writer.updated == []

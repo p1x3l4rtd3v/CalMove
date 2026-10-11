@@ -58,6 +58,8 @@ The interactive wizard then:
 |---|---|
 | `--dry-run` | Compute and show the plan only; zero writes. |
 | `--room-map rooms.json` | Translate room resource e-mails between workspaces (see below). |
+| `--map-domain old=new` | Rewrite attendee domains on owned events, e.g. `--map-domain old-company.com=new-company.com` (repeatable). Local parts stay; rooms and other domains untouched. |
+| `--attendee-map attendees.json` | Explicit old → new attendee e-mails for people whose local part changes (beats domain rules). |
 | `--send-updates [none\|all\|externalOnly]` | Invitation e-mails for created events. Default `none` — attendees are not spammed. |
 
 Room map example (`rooms.json`):
@@ -68,7 +70,9 @@ Room map example (`rooms.json`):
 }
 ```
 
-Unmapped rooms are kept verbatim and flagged in the report.
+Unmapped rooms are kept verbatim and flagged in the report. Attendee rewriting plus the
+default `sendUpdates=none` means colleagues' events simply appear in their new calendars —
+no invitation e-mails; adding a rule later patches already-migrated events in place.
 
 Re-running a migration **synchronizes**: events carry a `calmove-source-id` marker and a
 content fingerprint, so a re-run skips unchanged events, updates changed ones in place,
@@ -108,7 +112,9 @@ docker run --rm -p 8080:8080 \
 ```
 
 Terminate TLS at a reverse proxy in front of the container. Optional:
-`CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_PORT` (default 8080).
+`CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_ATTENDEE_MAP` (attendee-map JSON
+path), `CALMOVE_WEB_DOMAIN_MAP` (e.g. `old-company.com=new-company.com,other.com=new.com`),
+`CALMOVE_WEB_PORT` (default 8080).
 Run it locally without Docker via `uv run calmove-web`.
 
 ## Known limitations

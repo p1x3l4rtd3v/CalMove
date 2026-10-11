@@ -55,6 +55,8 @@ class WebConfig:
     client_secret: Path
     base_url: str
     room_map: Mapping[str, str] = field(default_factory=dict)
+    attendee_map: Mapping[str, str] = field(default_factory=dict)
+    domain_map: Mapping[str, str] = field(default_factory=dict)
     session_ttl: float = DEFAULT_TTL_SECONDS
     host: str = "0.0.0.0"  # noqa: S104 — containerized service behind a reverse proxy
     port: int = 8080
@@ -65,19 +67,22 @@ class WebConfig:
         if not client_secret.is_file():
             raise SystemExit(f"OAuth web client secret not found: {client_secret}")
         base_url = _require_env("CALMOVE_WEB_BASE_URL").rstrip("/")
-        room_map: dict[str, str] = {}
-        room_map_path = os.environ.get("CALMOVE_WEB_ROOM_MAP")
-        if room_map_path:
-            payload = json.loads(Path(room_map_path).read_text(encoding="utf-8"))
-            if not isinstance(payload, dict) or not all(
-                isinstance(k, str) and isinstance(v, str) for k, v in payload.items()
-            ):
-                raise SystemExit("Room map must be a JSON object of old → new room e-mails.")
-            room_map = payload
+        room_map = _load_json_map("CALMOVE_WEB_ROOM_MAP", "Room map")
+        attendee_map = _load_json_map("CALMOVE_WEB_ATTENDEE_MAP", "Attendee map")
+        domain_map: dict[str, str] = {}
+        for rule in filter(None, os.environ.get("CALMOVE_WEB_DOMAIN_MAP", "").split(",")):
+            old, sep, new = rule.partition("=")
+            if not sep or not old.strip() or not new.strip():
+                raise SystemExit(
+                    f"Invalid CALMOVE_WEB_DOMAIN_MAP rule {rule!r}; expected old=new[,old=new…]."
+                )
+            domain_map[old.strip().lstrip("@")] = new.strip().lstrip("@")
         return cls(
             client_secret=client_secret,
             base_url=base_url,
             room_map=room_map,
+            attendee_map=attendee_map,
+            domain_map=domain_map,
             port=int(os.environ.get("CALMOVE_WEB_PORT", "8080")),
         )
 
@@ -91,6 +96,19 @@ def _require_env(name: str) -> str:
     if not value:
         raise SystemExit(f"Required environment variable {name} is not set.")
     return value
+
+
+def _load_json_map(env_name: str, label: str) -> dict[str, str]:
+    """Load an optional ``{old: new}`` JSON map from the path in ``env_name``."""
+    path = os.environ.get(env_name)
+    if not path:
+        return {}
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in payload.items()
+    ):
+        raise SystemExit(f"{label} must be a JSON object of old → new e-mail strings.")
+    return payload
 
 
 class GoogleWebOAuth:
@@ -448,6 +466,8 @@ def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> 
         dry_run=dry_run,
         send_updates="none",
         room_map=config.room_map,
+        attendee_map=config.attendee_map,
+        domain_map=config.domain_map,
         source_address=session.source_address,
         forward_address=session.forward_address,
     )

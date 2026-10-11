@@ -114,6 +114,18 @@ def _load_room_map(path: Path) -> dict[str, str]:
     return payload
 
 
+def _parse_domain_rules(rules: list[str]) -> dict[str, str]:
+    """Parse repeated ``old=new`` domain rules into a map."""
+    domains: dict[str, str] = {}
+    for rule in rules:
+        old, sep, new = rule.partition("=")
+        if not sep or not old.strip() or not new.strip():
+            console.print(f"[red]Invalid --map-domain rule {rule!r}; expected old=new.[/red]")
+            raise typer.Exit(code=1)
+        domains[old.strip().lstrip("@")] = new.strip().lstrip("@")
+    return domains
+
+
 def _print_plan(result: MigrationResult) -> None:
     table = Table(title="Migration plan (dry run)")
     table.add_column("Outcome")
@@ -167,6 +179,17 @@ def migrate(
         Path | None,
         typer.Option("--room-map", help="JSON map of old → new room resource e-mails."),
     ] = None,
+    attendee_map: Annotated[
+        Path | None,
+        typer.Option("--attendee-map", help="JSON map of old → new attendee e-mails."),
+    ] = None,
+    map_domain: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--map-domain",
+            help="Rewrite attendee domains, e.g. old-company.com=new-company.com (repeatable).",
+        ),
+    ] = None,
     send_updates: Annotated[
         SendUpdates,
         typer.Option("--send-updates", help="Whether Google notifies attendees."),
@@ -186,6 +209,8 @@ def migrate(
         raise typer.Exit(code=2)
 
     rooms = _load_room_map(room_map) if room_map is not None else {}
+    attendees = _load_room_map(attendee_map) if attendee_map is not None else {}
+    domains = _parse_domain_rules(map_domain or [])
     store = KeyringTokenStore()
 
     console.print("[bold]Step 1 — sign in to the old (source) workspace[/bold]")
@@ -217,6 +242,8 @@ def migrate(
         dry_run=True,
         send_updates=send_updates.value,
         room_map=rooms,
+        attendee_map=attendees,
+        domain_map=domains,
         source_address=source_address,
         forward_address=forward_address,
     )
@@ -246,6 +273,8 @@ def migrate(
         dry_run=False,
         send_updates=send_updates.value,
         room_map=rooms,
+        attendee_map=attendees,
+        domain_map=domains,
         source_address=source_address,
         forward_address=forward_address,
     )

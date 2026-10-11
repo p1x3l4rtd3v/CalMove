@@ -244,6 +244,21 @@ Key behaviors:
   between workspaces, an optional JSON **room map** (`--room-map rooms.json`,
   `{"old-room@resource.calendar.google.com": "new-room@..."}`) translates them; unmapped rooms are
   kept verbatim and flagged in the report.
+- **Attendee address mapping** — when the whole organization changes domain (e.g. a temporary
+  move `@old-company.com` → `@new-company.com`), attendee addresses on owned events are rewritten
+  during migration so events appear directly in colleagues' new calendars without any
+  invitation e-mails (`sendUpdates=none`). Two tiers, precedence explicit > domain > unchanged:
+  - **domain rules** (`--map-domain old-company.com=new-company.com`, repeatable; web:
+    `CALMOVE_WEB_DOMAIN_MAP="old-company.com=new-company.com,…"`): rewrite the domain, keep the
+    local part; matching is case-insensitive;
+  - **explicit entries** (`--attendee-map attendees.json`, web: `CALMOVE_WEB_ATTENDEE_MAP`):
+    full old → new address pairs for people whose local part changes.
+  Only human attendees are mapped (rooms stay governed by the room map); addresses outside
+  the mapped domains (externals) pass through untouched; `displayName`, `optional`, and the
+  RSVP are preserved. The fingerprint is computed on the *mapped* event, so changing the map
+  later patches events in place (same event ids, no re-invitations) — the return journey of a
+  temporary domain move is free when IT re-attaches the old domain to the workspace, and
+  costs one reversed rule otherwise.
 - **Date range** — applied server-side via `timeMin`/`timeMax`; presets map to
   `DateRange.future()` (today → ∞), `DateRange.everything()`, or `DateRange.between(a, b)`.
 
