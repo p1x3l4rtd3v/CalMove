@@ -24,8 +24,12 @@ Do this in a project you control (either Workspace's organization works; the app
 3. **OAuth consent screen** (newer console: *Google Auth Platform*):
    - User type **External** — logins come from *both* Workspaces, so *Internal* is not an option.
    - App name, support e-mail, developer contact.
-   - Scopes: `calendar.readonly`, `calendar.events.owned` (source: read + forward invitations
-     on the user's own calendar only), `calendar.events` (destination: create/update events).
+   - Scopes: `calendar.readonly`, `calendar.events.owned` (source: the token *could* write
+     to any calendar the user owns; CalMove performs exactly one write with it — appending
+     the new address to an invited event's guest list), `calendar.events` (destination: the
+     token *could* write to any calendar the user can write; CalMove writes only to the
+     destination calendar the user chose). When deciding whether to mark the app **Trusted**
+     (below), assess that blast radius, not just CalMove's intended behavior.
 4. **Credentials → Create credentials → OAuth client ID**:
    - Application type **Web application**.
    - Authorized redirect URI: `https://<your-calmove-host>/oauth/callback` — must match
@@ -63,8 +67,9 @@ Room resource e-mails differ between Workspaces. List them old → new:
 ```
 
 Find the resource e-mails in each Admin console under **Directory → Buildings and resources →
-Manage resources** (column *Resource email*). Unmapped rooms are kept verbatim and flagged in
-every user's migration report — use those flags to grow this file during the pilot.
+Manage resources** (column *Resource email*). Unmapped rooms are kept verbatim — the plan
+page says exactly that ("kept verbatim") — and flagged in every user's migration report;
+use those flags to grow this file during the pilot.
 
 ### Domain rule — company-wide address change
 
@@ -116,6 +121,20 @@ docker run -d --name calmove-web --restart unless-stopped \
   -e CALMOVE_WEB_DOMAIN_MAP="old-company.com=new-company.com" \
   calmove-web
 ```
+
+### Baking the client secret into the image (optional)
+
+Instead of mounting the secret at runtime you can bake it in at build time with BuildKit:
+
+```sh
+docker build --secret id=client_secret,src=/srv/calmove/client_secret.json -t calmove-web .
+```
+
+Then run **without** the `client_secret.json` volume and without `-e CALMOVE_WEB_CLIENT_SECRET`
+— the image defaults to the baked `/app/client_secret.json`.
+
+> **WARNING**: the image now *contains the credential*. Push it only to a **private**
+> registry, never a public one. The runtime secret mount remains the recommended default.
 
 ### Environment reference
 
@@ -179,3 +198,5 @@ address and their RSVP carried over.
 | Destination calendar not selectable | The account only has `reader` access there; destination needs `writer`/`owner` |
 | Unmapped rooms flagged in reports | Add the pair to `rooms.json`, restart the container; the next re-run patches affected events in place |
 | "The service is at capacity" | More than 1000 live sessions (or an abuse flood) — rate-limit `/start` at the proxy, or restart to clear |
+| Many failures with 401 after a long session | Google access tokens expire after ~1 h; finish the wizard within an hour or restart from Start |
+| Shared destination calendars | Any co-writer of the destination calendar could tamper with CalMove sync markers; CalMove refuses to update/delete events it did not create, flagging them in the report |

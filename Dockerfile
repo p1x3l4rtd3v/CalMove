@@ -1,3 +1,4 @@
+# check=skip=SecretsUsedInArgOrEnv  (false positive: the ENV below holds a file PATH, not a secret)
 # CalMove web — stateless migration wizard (spec §10).
 # No volumes, no writable state: tokens and event data live only in process RAM.
 # Bases are digest-pinned (supply-chain); bump digests deliberately when updating.
@@ -24,12 +25,25 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 
 RUN useradd --system --no-create-home calmove
+
+# Optional secure bake of the OAuth client secret (BuildKit):
+#   docker build --secret id=client_secret,src=/srv/calmove/client_secret.json …
+# If no secret is supplied the build succeeds and the file is simply absent.
+RUN --mount=type=secret,id=client_secret,required=false sh -c 'if [ -s /run/secrets/client_secret ]; then install -m 400 -o calmove -g calmove /run/secrets/client_secret /app/client_secret.json; fi'
+ENV CALMOVE_WEB_CLIENT_SECRET=/app/client_secret.json
+
 USER calmove
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Required at runtime:
-#   CALMOVE_WEB_CLIENT_SECRET  path to the OAuth *web* client JSON (mount as a secret)
+#   CALMOVE_WEB_CLIENT_SECRET  path to the OAuth *web* client JSON
+#                              (defaults to /app/client_secret.json when baked at build time;
+#                              runtime -e / secret mount overrides)
 #   CALMOVE_WEB_BASE_URL       external HTTPS URL of this service
-# Optional: CALMOVE_WEB_ROOM_MAP, CALMOVE_WEB_PORT (default 8080)
+# Optional:
+#   CALMOVE_WEB_ROOM_MAP       path to rooms.json (old → new room resource e-mails)
+#   CALMOVE_WEB_ATTENDEE_MAP   path to attendees.json (old → new attendee addresses)
+#   CALMOVE_WEB_DOMAIN_MAP    "old=new[,old=new…]" domain rewrite rules
+#   CALMOVE_WEB_PORT           container port (default 8080)
 EXPOSE 8080
 CMD ["calmove-web"]

@@ -7,12 +7,11 @@ browser session driving it (Constitution art. 6).
 """
 
 import hmac
-import json
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +24,11 @@ from calmove.application.migrate_calendar import (
     MigrationRequest,
 )
 from calmove.application.ports import CalendarReader, CalendarWriter
+from calmove.application.reporting import NullReporter
 from calmove.domain.date_range import DateRange
-from calmove.domain.errors import CalMoveError, InvalidDateRangeError
-from calmove.domain.model import Calendar, CalendarEvent
+from calmove.domain.errors import CalMoveError, InvalidConfigError, InvalidDateRangeError
+from calmove.domain.model import Calendar, primary_address
+from calmove.infrastructure.config import load_address_map, parse_domain_rules
 from calmove.infrastructure.google.auth import (
     DESTINATION_SCOPES,
     SOURCE_SCOPES,
@@ -67,16 +68,13 @@ class WebConfig:
         if not client_secret.is_file():
             raise SystemExit(f"OAuth web client secret not found: {client_secret}")
         base_url = _require_env("CALMOVE_WEB_BASE_URL").rstrip("/")
-        room_map = _load_json_map("CALMOVE_WEB_ROOM_MAP", "Room map")
-        attendee_map = _load_json_map("CALMOVE_WEB_ATTENDEE_MAP", "Attendee map")
-        domain_map: dict[str, str] = {}
-        for rule in filter(None, os.environ.get("CALMOVE_WEB_DOMAIN_MAP", "").split(",")):
-            old, sep, new = rule.partition("=")
-            if not sep or not old.strip() or not new.strip():
-                raise SystemExit(
-                    f"Invalid CALMOVE_WEB_DOMAIN_MAP rule {rule!r}; expected old=new[,old=new…]."
-                )
-            domain_map[old.strip().lstrip("@")] = new.strip().lstrip("@")
+        rules = [r for r in os.environ.get("CALMOVE_WEB_DOMAIN_MAP", "").split(",") if r.strip()]
+        try:
+            room_map = _load_env_map("CALMOVE_WEB_ROOM_MAP", "Room map")
+            attendee_map = _load_env_map("CALMOVE_WEB_ATTENDEE_MAP", "Attendee map")
+            domain_map = parse_domain_rules(rules)
+        except InvalidConfigError as error:
+            raise SystemExit(str(error)) from error
         return cls(
             client_secret=client_secret,
             base_url=base_url,
@@ -98,17 +96,12 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _load_json_map(env_name: str, label: str) -> dict[str, str]:
-    """Load an optional ``{old: new}`` JSON map from the path in ``env_name``."""
+def _load_env_map(env_name: str, label: str) -> dict[str, str]:
+    """Load an optional ``{old: new}`` address map from the path in ``env_name``."""
     path = os.environ.get(env_name)
     if not path:
         return {}
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in payload.items()
-    ):
-        raise SystemExit(f"{label} must be a JSON object of old → new e-mail strings.")
-    return payload
+    return load_address_map(Path(path), label)
 
 
 class GoogleWebOAuth:
@@ -137,28 +130,6 @@ class GoogleWebOAuth:
 def _default_gateway_factory(credentials: object) -> GoogleCalendarGateway:
     service: Any = build("calendar", "v3", credentials=credentials)
     return GoogleCalendarGateway(service)
-
-
-class _NullReporter:
-    """Reporter for the dry-run planning pass; the plan page speaks instead."""
-
-    def event_created(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_forwarded(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_updated(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_deleted(self, source_id: str) -> None:
-        pass
-
-    def event_skipped(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_failed(self, event: CalendarEvent, error: Exception) -> None:
-        pass
 
 
 def create_app(
@@ -275,15 +246,20 @@ def create_app(
         session.oauth_state = None
         session.oauth_verifier = None
         gateway = make_gateway(credentials)
+        try:
+            calendars = list(gateway.list_calendars())
+        except CalMoveError as error:
+            return fail(str(error))
         if role == "source":
             session.source = gateway
             session.forwarder = gateway
-            session.source_calendars = list(gateway.list_calendars())
-            session.source_address = _primary_address(session.source_calendars)
+            session.source_calendars = calendars
+            session.source_address = primary_address(calendars)
         else:
             session.destination = gateway
-            session.destination_calendars = list(gateway.list_calendars())
-            session.forward_address = _primary_address(session.destination_calendars)
+            session.responder = gateway
+            session.destination_calendars = calendars
+            session.forward_address = primary_address(calendars)
         return redirect(url_for("pick_calendar", role=role))
 
     @app.route("/calendars/<role>", methods=["GET", "POST"])
@@ -339,7 +315,7 @@ def create_app(
                 plan_request = _build_request(session, config, dry_run=True)
                 try:
                     session.plan = MigrateCalendarUseCase(
-                        source, destination, _NullReporter()
+                        source, destination, NullReporter()
                     ).execute(plan_request)
                 except CalMoveError as error:
                     return fail(str(error))
@@ -366,7 +342,11 @@ def create_app(
         source, destination = _gateways(session)
         run_request = _build_request(session, config, dry_run=False)
         use_case = MigrateCalendarUseCase(
-            source, destination, SessionReporter(session), forwarder=session.forwarder
+            source,
+            destination,
+            SessionReporter(session),
+            forwarder=session.forwarder,
+            responder=session.responder,
         )
 
         def run() -> None:
@@ -390,15 +370,24 @@ def create_app(
         if session.status == "setup":
             return redirect(url_for("index"))
         with session.lock:
+            report = session.report if session.status in {"done", "failed"} else None
+            if report is not None:
+                created, forwarded, updated = report.created, report.forwarded, report.updated
+                deleted, skipped = report.deleted, report.skipped
+                failed = list(report.failed)
+            else:
+                created, forwarded = session.progress_created, session.progress_forwarded
+                updated, deleted = session.progress_updated, session.progress_deleted
+                skipped, failed = session.progress_skipped, list(session.progress_failed)
             return render_template(
                 "progress.html",
                 status=session.status,
-                created=session.progress_created,
-                forwarded=session.progress_forwarded,
-                updated=session.progress_updated,
-                deleted=session.progress_deleted,
-                skipped=session.progress_skipped,
-                failed=list(session.progress_failed),
+                created=created,
+                forwarded=forwarded,
+                updated=updated,
+                deleted=deleted,
+                skipped=skipped,
+                failed=failed,
                 error=session.error,
                 csrf=session.csrf_token,
             )
@@ -427,7 +416,9 @@ def _parse_range(form: Mapping[str, str]) -> DateRange:
     if preset == "everything":
         return DateRange.everything()
     if preset == "custom":
-        return DateRange.between(_parse_date(form.get("start")), _parse_date(form.get("end")))
+        start = _parse_date(form.get("start"))
+        end = _parse_date(form.get("end")) + timedelta(days=1)
+        return DateRange.between(start, end)
     return DateRange.future()
 
 
@@ -445,11 +436,6 @@ def _gateways(session: WebSession) -> tuple[CalendarReader, CalendarWriter]:
     if session.source is None or session.destination is None:
         raise RuntimeError("Session is not fully authenticated.")
     return session.source, session.destination
-
-
-def _primary_address(calendars: list[Calendar]) -> str | None:
-    """The account's primary calendar id is its e-mail address."""
-    return next((c.id for c in calendars if c.primary), None)
 
 
 def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> MigrationRequest:

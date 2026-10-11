@@ -110,6 +110,7 @@ def event_to_api(
     source_id: str | None = None,
     fingerprint: str | None = None,
     request_meet: bool = False,
+    annotate_original_link: bool = False,
 ) -> dict[str, Any]:
     description = event.description
     payload: dict[str, Any] = {
@@ -150,6 +151,7 @@ def event_to_api(
                 "conferenceSolutionKey": {"type": "hangoutsMeet"},
             }
         }
+    if annotate_original_link and event.conference_link is not None:
         description = description + _MIGRATION_NOTE.format(link=event.conference_link)
     payload["description"] = description
     return payload

@@ -12,6 +12,7 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from calmove.application.ports import MigratedEvent
 from calmove.domain.date_range import DateRange
 from calmove.domain.model import Calendar, CalendarEvent, EventTime
 from calmove.web.main import WebConfig, create_app
@@ -39,11 +40,13 @@ class SourceGateway:
     def __init__(self, events: Sequence[CalendarEvent]) -> None:
         self.events = list(events)
         self.calendars: list[Calendar] = [SOURCE_CAL]
+        self.fetched_ranges: list[DateRange] = []
 
     def list_calendars(self) -> list[Calendar]:
         return list(self.calendars)
 
     def fetch_events(self, calendar_id: str, date_range: DateRange) -> list[CalendarEvent]:
+        self.fetched_ranges.append(date_range)
         return list(self.events)
 
     def forward_invitation(
@@ -63,7 +66,7 @@ class DestinationGateway:
     def list_calendars(self) -> list[Calendar]:
         return list(self.calendars)
 
-    def migrated_events(self, calendar_id: str, date_range: DateRange) -> dict[str, object]:
+    def migrated_events(self, calendar_id: str, date_range: DateRange) -> dict[str, MigratedEvent]:
         return {}
 
     def create_event(
@@ -313,6 +316,57 @@ class TestWizardFlow:
         assert response.status_code == 400
         assert harness.destination.created == []
         assert harness.session_for(client).status == "setup"
+
+    def test_custom_range_end_date_is_inclusive(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        assert client.post("/start").status_code == 302
+        csrf = harness.session_for(client).csrf_token
+        _login(client, harness, "source", "code-src")
+        client.post("/calendars/source", data={"calendar_id": "src-cal", "csrf": csrf})
+        _login(client, harness, "destination", "code-dst")
+        client.post("/calendars/destination", data={"calendar_id": "dst-cal", "csrf": csrf})
+        response = client.post(
+            "/range",
+            data={"preset": "custom", "start": "2026-01-05", "end": "2026-01-05", "csrf": csrf},
+        )
+        assert response.status_code == 302
+        assert response.location.endswith("/plan")
+        window = harness.session_for(client).date_range
+        assert window is not None
+        assert window.time_min == datetime(2026, 1, 5, tzinfo=UTC)
+        assert window.time_max == datetime(2026, 1, 6, tzinfo=UTC)
+        assert harness.source.fetched_ranges[-1] == window
+
+    def test_plan_page_warns_when_only_failures_remain(self) -> None:
+        harness = _harness(events=[])
+        client = harness.client()
+        _advance_to_plan(client, harness)
+        session = harness.session_for(client)
+        assert session.plan is not None
+        session.plan.failed.append(("evt-broken", "cannot migrate this one"))
+        page = client.get("/plan")
+        assert page.status_code == 200
+        assert b"1 items need attention" in page.data
+        assert b"Finish" in page.data
+
+    def test_done_page_renders_failures_from_the_final_report(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        csrf = _advance_to_plan(client, harness)
+        session = harness.session_for(client)
+        client.post("/migrate", data={"confirm": "migrate", "csrf": csrf})
+        _wait_for_completion(session)
+        assert session.status == "done"
+        # Inject a failure into the final report only — the done page must render
+        # from the report (the truth), not from the live progress counters.
+        with session.lock:
+            assert session.report is not None
+            session.report.failed.append(("evt-late", "delete bounced"))
+        page = client.get("/progress")
+        assert b"Migration finished" in page.data
+        assert b"evt-late" in page.data
+        assert b"delete bounced" in page.data
 
 
 class TestSecurityBoundaries:

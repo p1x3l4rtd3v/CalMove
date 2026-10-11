@@ -6,7 +6,9 @@ from dataclasses import dataclass, field, replace
 from calmove.application.ports import (
     CalendarReader,
     CalendarWriter,
+    InvitationResponder,
     InviteForwarder,
+    MigratedEvent,
     MigrationReporter,
 )
 from calmove.domain.date_range import DateRange
@@ -15,6 +17,11 @@ from calmove.domain.fingerprint import event_fingerprint
 from calmove.domain.model import Attendee, CalendarEvent
 
 _MASTER_NOT_MIGRATED = "master not migrated"
+_UNTRUSTED_MARKER = (
+    "destination event carries a CalMove marker but was not created by this user"
+    " — left untouched for safety"
+)
+_ANSWERED = frozenset({"accepted", "tentative", "declined"})
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -62,11 +69,13 @@ class MigrateCalendarUseCase:
         writer: CalendarWriter,
         reporter: MigrationReporter,
         forwarder: InviteForwarder | None = None,
+        responder: InvitationResponder | None = None,
     ) -> None:
         self._reader = reader
         self._writer = writer
         self._reporter = reporter
         self._forwarder = forwarder
+        self._responder = responder
 
     def execute(self, request: MigrationRequest) -> MigrationResult:
         result = MigrationResult()
@@ -88,65 +97,117 @@ class MigrateCalendarUseCase:
         invited_ids = {event.id for event in invited}
 
         for event in owned:
-            exceptions = exceptions_by_master.get(event.id, [])
-            mapped_event = self._map_addresses(event, request, result)
-            mapped_exceptions = [self._map_addresses(e, request, result) for e in exceptions]
-            fingerprint = event_fingerprint(mapped_event, mapped_exceptions)
-            prior = existing.get(event.id)
-
-            if prior is not None and prior.fingerprint == fingerprint:
-                result.skipped += 1
-                self._reporter.event_skipped(event)
-                for exception in exceptions:
-                    result.skipped += 1
-                    self._reporter.event_skipped(exception)
-                continue
-
-            if request.dry_run:
-                if prior is None:
-                    result.created += 1
-                else:
-                    result.updated += 1
-                continue
-
-            if prior is None:
-                try:
-                    new_id = self._writer.create_event(
-                        request.destination_calendar_id,
-                        mapped_event,
-                        fingerprint=fingerprint,
-                        send_updates=request.send_updates,
-                    )
-                except Exception as error:
-                    self._fail_series(result, event, exceptions, error)
-                    continue
-                result.created += 1
-                self._reporter.event_created(event)
-                result.created += self._apply_exceptions(
-                    request, result, new_id, exceptions, mapped_exceptions
-                )
-            else:
-                try:
-                    self._writer.update_event(
-                        request.destination_calendar_id,
-                        prior.destination_id,
-                        mapped_event,
-                        fingerprint=fingerprint,
-                        send_updates=request.send_updates,
-                    )
-                except Exception as error:
-                    self._fail_series(result, event, exceptions, error)
-                    continue
-                result.updated += 1
-                self._reporter.event_updated(event)
-                result.updated += self._apply_exceptions(
-                    request, result, prior.destination_id, exceptions, mapped_exceptions
-                )
-
+            self._sync_owned(
+                request, result, existing, event, exceptions_by_master.get(event.id, [])
+            )
         for event in invited:
             self._forward(request, result, event)
+        self._delete_vanished(request, result, existing, owned_ids)
+        self._fail_orphans(result, exceptions_by_master, owned_ids | invited_ids)
+        return result
+
+    def _sync_owned(
+        self,
+        request: MigrationRequest,
+        result: MigrationResult,
+        existing: Mapping[str, MigratedEvent],
+        event: CalendarEvent,
+        exceptions: list[CalendarEvent],
+    ) -> None:
+        """Create, update, or skip one owned top-level event (plus its exceptions)."""
+        prior = existing.get(event.id)
+        if prior is not None and not prior.trusted:
+            result.failed.append((event.id, _UNTRUSTED_MARKER))
+            self._reporter.event_failed(event, MigrationError(_UNTRUSTED_MARKER))
+            return
+        if prior is not None and prior.duplicate_ids:
+            self._delete_duplicates(request, result, prior)
+
+        mapped_event = self._map_addresses(event, request, result)
+        mapped_exceptions = [self._map_addresses(e, request, result) for e in exceptions]
+        fingerprint = event_fingerprint(mapped_event, mapped_exceptions)
+
+        if prior is not None and prior.fingerprint == fingerprint:
+            result.skipped += 1
+            self._reporter.event_skipped(event)
+            for exception in exceptions:
+                result.skipped += 1
+                self._reporter.event_skipped(exception)
+            return
+
+        if request.dry_run:
+            if prior is None:
+                result.created += 1 + len(exceptions)
+            else:
+                result.updated += 1 + len(exceptions)
+            return
+
+        creating = prior is None
+        try:
+            if prior is None:
+                destination_id = self._writer.create_event(
+                    request.destination_calendar_id,
+                    mapped_event,
+                    fingerprint=fingerprint,
+                    send_updates=request.send_updates,
+                )
+            else:
+                destination_id = prior.destination_id
+                self._writer.update_event(
+                    request.destination_calendar_id,
+                    destination_id,
+                    mapped_event,
+                    fingerprint=fingerprint,
+                    send_updates=request.send_updates,
+                )
+        except Exception as error:
+            self._fail_series(result, event, exceptions, error)
+            return
+
+        if creating:
+            self._reporter.event_created(event)
+        else:
+            self._reporter.event_updated(event)
+        total = 1 + self._apply_exceptions(
+            request, result, destination_id, exceptions, mapped_exceptions
+        )
+        if creating:
+            result.created += total
+        else:
+            result.updated += total
+
+    def _delete_duplicates(
+        self, request: MigrationRequest, result: MigrationResult, prior: MigratedEvent
+    ) -> None:
+        """Remove surplus destination events carrying the same source-id marker."""
+        if request.dry_run:
+            result.deleted += len(prior.duplicate_ids)
+            return
+        for duplicate_id in prior.duplicate_ids:
+            try:
+                self._writer.delete_event(
+                    request.destination_calendar_id,
+                    duplicate_id,
+                    send_updates=request.send_updates,
+                )
+            except Exception as error:
+                result.failed.append((duplicate_id, str(error)))
+            else:
+                result.deleted += 1
+
+    def _delete_vanished(
+        self,
+        request: MigrationRequest,
+        result: MigrationResult,
+        existing: Mapping[str, MigratedEvent],
+        owned_ids: set[str],
+    ) -> None:
+        """Delete destination copies whose source event no longer exists."""
         for source_id, prior in existing.items():
             if source_id in owned_ids:
+                continue
+            if not prior.trusted:
+                result.failed.append((source_id, _UNTRUSTED_MARKER))
                 continue
             if request.dry_run:
                 result.deleted += 1
@@ -163,17 +224,23 @@ class MigrateCalendarUseCase:
                 result.deleted += 1
                 self._reporter.event_deleted(source_id)
 
+    def _fail_orphans(
+        self,
+        result: MigrationResult,
+        exceptions_by_master: Mapping[str, list[CalendarEvent]],
+        known_master_ids: set[str],
+    ) -> None:
+        """Fail exceptions whose master was neither owned nor invited.
+
+        Owned masters are handled in the sync loop; invited masters carry their own
+        exceptions on the organizer's event, so forwarding the master covers them.
+        """
         for master_id, orphans in exceptions_by_master.items():
-            if master_id in owned_ids or master_id in invited_ids:
-                # Owned: handled above. Invited: the organizer's event carries its own
-                # exceptions; forwarding the master covers them.
+            if master_id in known_master_ids:
                 continue
             for exception in orphans:
-                orphan_error = MigrationError(_MASTER_NOT_MIGRATED)
                 result.failed.append((exception.id, _MASTER_NOT_MIGRATED))
-                self._reporter.event_failed(exception, orphan_error)
-
-        return result
+                self._reporter.event_failed(exception, MigrationError(_MASTER_NOT_MIGRATED))
 
     def _forward(
         self, request: MigrationRequest, result: MigrationResult, event: CalendarEvent
@@ -183,9 +250,16 @@ class MigrateCalendarUseCase:
         if forward_address is None:
             result.failed.append((event.id, "no destination account address for forwarding"))
             return
-        if any(a.email.lower() == forward_address.lower() for a in event.attendees):
+        guest = next(
+            (a for a in event.attendees if a.email.lower() == forward_address.lower()), None
+        )
+        if guest is not None:
             result.skipped += 1
             self._reporter.event_skipped(event)
+            # A prior run forwarded but may have failed to mirror the RSVP: retry while
+            # the new address still shows "needsAction"; never override a manual answer.
+            if not request.dry_run and guest.response_status == "needsAction":
+                self._mirror_rsvp(request, result, event, forward_address)
             return
         if request.dry_run:
             result.forwarded += 1
@@ -215,17 +289,20 @@ class MigrateCalendarUseCase:
         event: CalendarEvent,
         forward_address: str,
     ) -> None:
-        """Copy the old account's RSVP onto the new account's freshly forwarded invite."""
+        """Copy the old account's RSVP onto the new account's forwarded invite."""
         if request.source_address is None:
             return
         old = next(
             (a for a in event.attendees if a.email.lower() == request.source_address.lower()),
             None,
         )
-        if old is None or old.response_status not in {"accepted", "tentative", "declined"}:
+        if old is None or old.response_status not in _ANSWERED:
+            return
+        if self._responder is None:
+            result.failed.append((event.id, "RSVP mirror unavailable"))
             return
         try:
-            self._writer.respond_to_invitation(event.id, forward_address, old.response_status)
+            self._responder.respond_to_invitation(event.id, forward_address, old.response_status)
         except Exception as error:
             result.failed.append((event.id, f"RSVP mirror failed: {error}"))
 
@@ -264,9 +341,8 @@ class MigrateCalendarUseCase:
         result.failed.append((event.id, str(error)))
         self._reporter.event_failed(event, error)
         for exception in exceptions:
-            master_error = MigrationError(_MASTER_NOT_MIGRATED)
             result.failed.append((exception.id, _MASTER_NOT_MIGRATED))
-            self._reporter.event_failed(exception, master_error)
+            self._reporter.event_failed(exception, MigrationError(_MASTER_NOT_MIGRATED))
 
     @staticmethod
     def _map_rooms(

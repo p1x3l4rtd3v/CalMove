@@ -1,9 +1,10 @@
 """Interactive wizard prompts (rich) for the migrate command."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -12,6 +13,11 @@ from calmove.domain.errors import InvalidDateRangeError
 from calmove.domain.model import Calendar
 
 WRITABLE_ROLES = frozenset({"writer", "owner"})
+
+
+def _safe(text: str) -> str:
+    """Neutralize rich markup and newlines in externally sourced text."""
+    return escape(" ".join(text.split()))
 
 
 def pick_calendar(
@@ -34,8 +40,8 @@ def pick_calendar(
     for index, calendar in enumerate(calendars, start=1):
         table.add_row(
             str(index),
-            calendar.summary or calendar.id,
-            calendar.access_role,
+            _safe(calendar.summary or calendar.id),
+            _safe(calendar.access_role),
             "yes" if calendar.primary else "",
         )
     console.print(table)
@@ -53,8 +59,8 @@ def pick_calendar(
         calendar = calendars[index - 1]
         if require_writable and calendar.access_role not in WRITABLE_ROLES:
             console.print(
-                f"[red]'{calendar.summary or calendar.id}' has access role "
-                f"'{calendar.access_role}'; the destination needs 'writer' or 'owner'.[/red]"
+                f"[red]'{_safe(calendar.summary or calendar.id)}' has access role "
+                f"'{_safe(calendar.access_role)}'; the destination needs 'writer' or 'owner'.[/red]"
             )
             continue
         return calendar
@@ -62,7 +68,7 @@ def pick_calendar(
 
 def _prompt_date(console: Console, label: str) -> datetime:
     while True:
-        raw = Prompt.ask(f"{label} (YYYY-MM-DD)", console=console)
+        raw = Prompt.ask(f"{label} (YYYY-MM-DD, inclusive)", console=console)
         try:
             return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=UTC)
         except ValueError:
@@ -84,9 +90,9 @@ def prompt_date_range(console: Console) -> DateRange:
         start = _prompt_date(console, "From")
         end = _prompt_date(console, "To")
         try:
-            return DateRange.between(start, end)
+            return DateRange.between(start, end + timedelta(days=1))
         except InvalidDateRangeError:
-            console.print("[red]The end date must lie after the start date.[/red]")
+            console.print("[red]The end date must not lie before the start date.[/red]")
 
 
 def confirm_migration(console: Console) -> bool:

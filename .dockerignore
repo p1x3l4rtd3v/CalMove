@@ -1,0 +1,10 @@
+# Allowlist: only what the build needs enters the context.
+*
+!pyproject.toml
+!uv.lock
+!src/
+
+# Belt-and-braces: never ship secrets even if the allowlist changes.
+client_secret*.json
+token*.json
+*.env

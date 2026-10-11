@@ -1,0 +1,19 @@
+"""Reporter implementations usable by any presentation layer."""
+
+from calmove.domain.model import CalendarEvent
+
+
+class NullReporter:
+    """MigrationReporter that discards every callback."""
+
+    def event_created(self, event: CalendarEvent) -> None: ...
+
+    def event_forwarded(self, event: CalendarEvent) -> None: ...
+
+    def event_updated(self, event: CalendarEvent) -> None: ...
+
+    def event_deleted(self, source_id: str) -> None: ...
+
+    def event_skipped(self, event: CalendarEvent) -> None: ...
+
+    def event_failed(self, event: CalendarEvent, error: Exception) -> None: ...

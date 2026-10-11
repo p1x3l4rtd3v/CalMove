@@ -56,11 +56,16 @@ flowchart TB
     subgraph CLI["Presentation — calmove/cli"]
         W[Interactive wizard<br/>Typer + rich]
     end
+    subgraph WEB["Presentation — calmove/web"]
+        WW[Browser wizard<br/>Flask + waitress]
+    end
     subgraph APP["Application — calmove/application"]
         UC[MigrateCalendarUseCase]
         P1[/CalendarReader port/]
         P2[/CalendarWriter port/]
         P3[/MigrationReporter port/]
+        P4[/InviteForwarder port/]
+        P5[/InvitationResponder port/]
     end
     subgraph DOM["Domain — calmove/domain"]
         E[CalendarEvent · Attendee · EventTime<br/>DateRange · MigrationPlan/Result]
@@ -71,10 +76,12 @@ flowchart TB
         M["mapping.py (API dict ⇄ domain)"]
     end
     W --> UC
-    UC --> P1 & P2 & P3
+    WW --> UC
+    UC --> P1 & P2 & P3 & P4 & P5
     UC --> E
-    G -. implements .-> P1 & P2
+    G -. implements .-> P1 & P2 & P4 & P5
     W -. implements .-> P3
+    WW -. implements .-> P3
     G --> M --> E
     G --> A
 ```
@@ -141,7 +148,9 @@ classDiagram
         +str visibility
         +str transparency
         +tuple~Reminder~ reminders
+        +bool reminders_use_default
         +str conference_link
+        +bool is_organizer
         +is_recurring_master()
         +is_exception()
     }
@@ -261,6 +270,8 @@ Key behaviors:
   costs one reversed rule otherwise.
 - **Date range** — applied server-side via `timeMin`/`timeMax`; presets map to
   `DateRange.future()` (today → ∞), `DateRange.everything()`, or `DateRange.between(a, b)`.
+  A custom To-date is **inclusive**: it is implemented by adding one day to the exclusive
+  `timeMax`.
 
 ### Known, unavoidable limitations (documented to the user)
 
@@ -270,6 +281,7 @@ Key behaviors:
 | Organizer | The migrating user becomes organizer of the new events (API constraint). |
 | Attendee RSVP status | Sent best-effort; Google may reset it to `needsAction`. |
 | Shared calendars | Destination write requires `writer`/`owner` access role (validated before migration). |
+| Removed recurrence exceptions | An exception deleted at the source (occurrence restored to series default) is not reverted on the destination by a re-run; re-create the event or fix the occurrence manually. |
 
 ---
 
@@ -373,8 +385,11 @@ sequenceDiagram
 - **Single process, threaded server** (`waitress`): the in-memory session store forbids
   multi-process workers. Scale-out would require shared session state and is out of scope.
 - **Configuration (env only):** `CALMOVE_WEB_CLIENT_SECRET` (path to the web client JSON,
-  mounted as a Docker secret), `CALMOVE_WEB_BASE_URL` (external HTTPS URL), optional
-  `CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_PORT` (default 8080).
+  mounted as a Docker secret; defaults to `/app/client_secret.json` when the secret was baked
+  into the image at build time), `CALMOVE_WEB_BASE_URL` (external HTTPS URL), optional
+  `CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_ATTENDEE_MAP` (attendee-map JSON
+  path), `CALMOVE_WEB_DOMAIN_MAP` (`old=new[,old=new…]` domain rules),
+  `CALMOVE_WEB_PORT` (default 8080).
 - **Writes only after confirmation**: the plan step is a dry run; the real run starts only
   after the user types `migrate` (same contract as the CLI). `sendUpdates` is fixed to `none`.
 - **CSRF**: every state-changing POST carries a per-session token (constant-time compared);

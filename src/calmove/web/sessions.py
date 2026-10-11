@@ -13,7 +13,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from calmove.application.migrate_calendar import MigrationResult
-from calmove.application.ports import CalendarReader, CalendarWriter, InviteForwarder
+from calmove.application.ports import (
+    CalendarReader,
+    CalendarWriter,
+    InvitationResponder,
+    InviteForwarder,
+)
 from calmove.domain.date_range import DateRange
 from calmove.domain.model import Calendar, CalendarEvent
 
@@ -33,6 +38,7 @@ class WebSession:
     source: CalendarReader | None = None
     destination: CalendarWriter | None = None
     forwarder: InviteForwarder | None = None
+    responder: InvitationResponder | None = None
     source_address: str | None = None
     forward_address: str | None = None
     source_calendars: list[Calendar] = field(default_factory=list)

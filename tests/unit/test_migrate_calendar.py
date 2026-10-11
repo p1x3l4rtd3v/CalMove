@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from conftest import FakeForwarder, synced
+from conftest import FakeForwarder, FakeResponder, synced
 
 from calmove.domain.fingerprint import event_fingerprint
 from calmove.domain.model import Attendee, EventTime
@@ -188,7 +188,7 @@ class TestDryRun:
         exc = _exception(make_event)
         result, writer, _ = migrate([single, master, exc], dry_run=True)
 
-        assert result.created == 2  # top-level would-creates only
+        assert result.created == 3  # master counts itself plus its exception
         assert writer.created == []
         assert writer.applied == []
 
@@ -398,16 +398,19 @@ class TestForwarding:
 
     def test_already_invited_address_is_skipped(self, migrate: Any, make_event: Any) -> None:
         forwarder = FakeForwarder()
+        responder = FakeResponder()
         invited = self._invited(
             make_event,
             attendees=(
                 Attendee(email="me@old.example", response_status="accepted"),
-                Attendee(email="ME@NEW.example"),  # case-insensitive membership
+                # case-insensitive membership; already answered manually
+                Attendee(email="ME@NEW.example", response_status="declined"),
             ),
         )
-        result, writer, _ = migrate(
+        result, _, _ = migrate(
             [invited],
             forwarder=forwarder,
+            responder=responder,
             source_address="me@old.example",
             forward_address="me@new.example",
         )
@@ -415,45 +418,50 @@ class TestForwarding:
         assert result.forwarded == 0
         assert result.skipped == 1
         assert forwarder.forwarded == []
-        assert writer.responses == []  # re-runs never override a manual RSVP
+        assert responder.responses == []  # re-runs never override a manual RSVP
+        assert result.failed == []
 
     def test_rsvp_is_mirrored_after_forward(self, migrate: Any, make_event: Any) -> None:
-        forwarder = FakeForwarder()
-        _, writer, _ = migrate(
+        responder = FakeResponder()
+        _, _, _ = migrate(
             [self._invited(make_event)],
-            forwarder=forwarder,
+            forwarder=FakeForwarder(),
+            responder=responder,
             source_address="me@old.example",
             forward_address="me@new.example",
         )
-        assert writer.responses == [("inv-1", "me@new.example", "accepted")]
+        assert responder.responses == [("inv-1", "me@new.example", "accepted")]
 
     def test_unanswered_invite_gets_no_rsvp(self, migrate: Any, make_event: Any) -> None:
-        forwarder = FakeForwarder()
+        responder = FakeResponder()
         invited = self._invited(
             make_event,
             attendees=(Attendee(email="me@old.example", response_status="needsAction"),),
         )
-        _, writer, _ = migrate(
+        _, _, _ = migrate(
             [invited],
-            forwarder=forwarder,
+            forwarder=FakeForwarder(),
+            responder=responder,
             source_address="me@old.example",
             forward_address="me@new.example",
         )
-        assert writer.responses == []
+        assert responder.responses == []
 
     def test_forward_failure_is_recorded_and_run_continues(
         self, migrate: Any, make_event: Any
     ) -> None:
         forwarder = FakeForwarder(fail_ids={"inv-1"})
-        result, writer, _ = migrate(
+        responder = FakeResponder()
+        result, _, _ = migrate(
             [self._invited(make_event), make_event("own-1")],
             forwarder=forwarder,
+            responder=responder,
             forward_address="me@new.example",
         )
         assert result.forwarded == 0
         assert result.created == 1  # owned event unaffected
         assert ("inv-1", "boom:forward:inv-1") in result.failed
-        assert writer.responses == []
+        assert responder.responses == []
 
     def test_missing_forward_address_is_reported(self, migrate: Any, make_event: Any) -> None:
         result, _, _ = migrate([self._invited(make_event)], forwarder=FakeForwarder())
@@ -461,15 +469,17 @@ class TestForwarding:
 
     def test_dry_run_counts_forwards_without_calls(self, migrate: Any, make_event: Any) -> None:
         forwarder = FakeForwarder()
-        result, writer, _ = migrate(
+        responder = FakeResponder()
+        result, _, _ = migrate(
             [self._invited(make_event)],
             forwarder=forwarder,
+            responder=responder,
             forward_address="me@new.example",
             dry_run=True,
         )
         assert result.forwarded == 1
         assert forwarder.forwarded == []
-        assert writer.responses == []
+        assert responder.responses == []
 
     def test_old_shadow_copy_of_invited_event_is_cleaned_up(
         self, migrate: Any, make_event: Any
@@ -609,3 +619,170 @@ class TestAttendeeMapping:
         result, writer, _ = migrate([event], migrated=synced(event))
         assert result.skipped == 1
         assert writer.updated == []
+
+
+class TestMarkerTrust:
+    def test_untrusted_marker_blocks_sync(self, migrate: Any, make_event: Any) -> None:
+        event = make_event("evt-1", summary="Changed")
+        result, writer, reporter = migrate(
+            [event], migrated=synced(event, fingerprint="stale", trusted=False)
+        )
+
+        assert result.created == result.updated == result.deleted == 0
+        assert writer.created == writer.updated == writer.deleted == []
+        assert len(result.failed) == 1
+        failed_id, message = result.failed[0]
+        assert failed_id == "evt-1"
+        assert "not created by this user" in message
+        assert [e.id for e, _ in reporter.failed] == ["evt-1"]
+
+    def test_untrusted_marker_blocks_delete_pass(self, migrate: Any, make_event: Any) -> None:
+        gone = make_event("gone-1")
+        result, writer, reporter = migrate([], migrated=synced(gone, trusted=False))
+
+        assert result.deleted == 0
+        assert writer.deleted == []
+        assert reporter.deleted == []
+        assert result.failed == [
+            (
+                "gone-1",
+                "destination event carries a CalMove marker but was not created by this user"
+                " — left untouched for safety",
+            )
+        ]
+
+
+class TestDuplicates:
+    def test_surplus_duplicates_deleted_and_primary_synced(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        event = make_event("evt-1", summary="Changed")
+        result, writer, _ = migrate(
+            [event],
+            migrated=synced(event, fingerprint="stale", duplicate_ids=("dup-1", "dup-2")),
+        )
+
+        assert result.deleted == 2
+        assert [d[1] for d in writer.deleted] == ["dup-1", "dup-2"]
+        assert result.updated == 1
+        assert writer.updated[0][1] == "dest-evt-1"  # primary, not a duplicate
+        assert result.failed == []
+
+    def test_duplicates_deleted_even_when_primary_unchanged(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        event = make_event("evt-1")
+        result, writer, _ = migrate([event], migrated=synced(event, duplicate_ids=("dup-1",)))
+
+        assert result.deleted == 1
+        assert [d[1] for d in writer.deleted] == ["dup-1"]
+        assert result.skipped == 1
+        assert writer.updated == []
+
+    def test_duplicate_delete_failure_is_recorded(self, migrate: Any, make_event: Any) -> None:
+        event = make_event("evt-1")
+        result, writer, _ = migrate(
+            [event],
+            migrated=synced(event, duplicate_ids=("dup-1", "dup-2")),
+            fail_ids={"dup-1"},
+        )
+
+        assert result.deleted == 1
+        assert [d[1] for d in writer.deleted] == ["dup-2"]
+        assert ("dup-1", "boom:dup-1") in result.failed
+
+    def test_dry_run_counts_duplicate_deletions(self, migrate: Any, make_event: Any) -> None:
+        event = make_event("evt-1", summary="Changed")
+        result, writer, _ = migrate(
+            [event],
+            migrated=synced(event, fingerprint="stale", duplicate_ids=("dup-1", "dup-2")),
+            dry_run=True,
+        )
+
+        assert result.deleted == 2
+        assert result.updated == 1
+        assert writer.deleted == writer.updated == []
+
+
+class TestRsvpRetry:
+    """A prior run forwarded but the mirror failed: retry while still unanswered."""
+
+    @staticmethod
+    def _rerun_invited(make_event: Any, new_status: str = "needsAction") -> Any:
+        return make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="me@old.example", response_status="accepted"),
+                Attendee(email="me@new.example", response_status=new_status),
+            ),
+        )
+
+    def test_retries_mirror_when_still_needs_action(self, migrate: Any, make_event: Any) -> None:
+        forwarder = FakeForwarder()
+        responder = FakeResponder()
+        result, _, _ = migrate(
+            [self._rerun_invited(make_event)],
+            forwarder=forwarder,
+            responder=responder,
+            source_address="me@old.example",
+            forward_address="me@new.example",
+        )
+
+        assert result.skipped == 1
+        assert forwarder.forwarded == []  # already a guest: no second forward
+        assert responder.responses == [("inv-1", "me@new.example", "accepted")]
+        assert result.failed == []
+
+    def test_no_retry_after_manual_answer(self, migrate: Any, make_event: Any) -> None:
+        responder = FakeResponder()
+        result, _, _ = migrate(
+            [self._rerun_invited(make_event, new_status="tentative")],
+            forwarder=FakeForwarder(),
+            responder=responder,
+            source_address="me@old.example",
+            forward_address="me@new.example",
+        )
+
+        assert result.skipped == 1
+        assert responder.responses == []
+        assert result.failed == []
+
+    def test_retry_failure_is_recorded(self, migrate: Any, make_event: Any) -> None:
+        responder = FakeResponder(fail_ids={"inv-1"})
+        result, _, _ = migrate(
+            [self._rerun_invited(make_event)],
+            responder=responder,
+            source_address="me@old.example",
+            forward_address="me@new.example",
+        )
+        assert result.failed == [("inv-1", "RSVP mirror failed: boom:rsvp:inv-1")]
+
+    def test_missing_responder_reported_only_when_mirror_due(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        result, _, _ = migrate(
+            [self._rerun_invited(make_event)],
+            source_address="me@old.example",
+            forward_address="me@new.example",
+        )
+        assert result.failed == [("inv-1", "RSVP mirror unavailable")]
+
+    def test_missing_responder_silent_when_old_account_unanswered(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        invited = make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="me@old.example", response_status="needsAction"),
+                Attendee(email="me@new.example"),
+            ),
+        )
+        result, _, _ = migrate(
+            [invited],
+            source_address="me@old.example",
+            forward_address="me@new.example",
+        )
+        assert result.skipped == 1
+        assert result.failed == []

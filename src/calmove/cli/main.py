@@ -1,6 +1,5 @@
 """CalMove CLI — Typer app and composition root."""
 
-import json
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -15,7 +14,10 @@ from calmove.application.migrate_calendar import (
     MigrationRequest,
     MigrationResult,
 )
-from calmove.domain.model import CalendarEvent
+from calmove.application.reporting import NullReporter
+from calmove.domain.errors import CalMoveError, InvalidConfigError
+from calmove.domain.model import CalendarEvent, primary_address
+from calmove.infrastructure.config import load_address_map, parse_domain_rules
 from calmove.infrastructure.google.auth import (
     DESTINATION_SCOPES,
     SOURCE_SCOPES,
@@ -25,6 +27,7 @@ from calmove.infrastructure.google.auth import (
 from calmove.infrastructure.google.gateway import GoogleCalendarGateway
 
 from . import prompts
+from .prompts import _safe
 
 app = typer.Typer(help="Migrate a Google Calendar between Google Workspaces.")
 console = Console()
@@ -36,28 +39,6 @@ class SendUpdates(StrEnum):
     externalOnly = "externalOnly"
 
 
-class _SilentReporter:
-    """Reporter for the dry-run planning pass; the plan table speaks instead."""
-
-    def event_created(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_forwarded(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_updated(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_deleted(self, source_id: str) -> None:
-        pass
-
-    def event_skipped(self, event: CalendarEvent) -> None:
-        pass
-
-    def event_failed(self, event: CalendarEvent, error: Exception) -> None:
-        pass
-
-
 class ConsoleReporter:
     """Prints one line per migrated event during the real run."""
 
@@ -66,7 +47,7 @@ class ConsoleReporter:
 
     @staticmethod
     def _label(event: CalendarEvent) -> str:
-        return event.summary or event.id
+        return _safe(event.summary or event.id)
 
     def event_created(self, event: CalendarEvent) -> None:
         self._console.print(f"[green]created[/green]  {self._label(event)}")
@@ -78,13 +59,13 @@ class ConsoleReporter:
         self._console.print(f"[cyan]updated[/cyan]  {self._label(event)}")
 
     def event_deleted(self, source_id: str) -> None:
-        self._console.print(f"[magenta]deleted[/magenta]  {source_id}")
+        self._console.print(f"[magenta]deleted[/magenta]  {_safe(source_id)}")
 
     def event_skipped(self, event: CalendarEvent) -> None:
         self._console.print(f"[yellow]skipped[/yellow]  {self._label(event)}")
 
     def event_failed(self, event: CalendarEvent, error: Exception) -> None:
-        self._console.print(f"[red]failed[/red]   {self._label(event)} — {error}")
+        self._console.print(f"[red]failed[/red]   {self._label(event)} — {_safe(str(error))}")
 
 
 def _build_gateway(
@@ -93,37 +74,6 @@ def _build_gateway(
     creds = authenticate(role, scopes, client_secret, store)
     service: Any = build("calendar", "v3", credentials=creds)
     return GoogleCalendarGateway(service)
-
-
-def _primary_address(calendars: list[Any]) -> str | None:
-    """The account's primary calendar id is its e-mail address."""
-    return next((c.id for c in calendars if c.primary), None)
-
-
-def _load_room_map(path: Path) -> dict[str, str]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        console.print(f"[red]Could not read room map {path}: {error}[/red]")
-        raise typer.Exit(code=1) from error
-    if not isinstance(payload, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in payload.items()
-    ):
-        console.print(f"[red]Room map {path} must be a JSON object of string → string.[/red]")
-        raise typer.Exit(code=1)
-    return payload
-
-
-def _parse_domain_rules(rules: list[str]) -> dict[str, str]:
-    """Parse repeated ``old=new`` domain rules into a map."""
-    domains: dict[str, str] = {}
-    for rule in rules:
-        old, sep, new = rule.partition("=")
-        if not sep or not old.strip() or not new.strip():
-            console.print(f"[red]Invalid --map-domain rule {rule!r}; expected old=new.[/red]")
-            raise typer.Exit(code=1)
-        domains[old.strip().lstrip("@")] = new.strip().lstrip("@")
-    return domains
 
 
 def _print_plan(result: MigrationResult) -> None:
@@ -158,11 +108,11 @@ def _print_details(result: MigrationResult) -> None:
     if result.unmapped_rooms:
         console.print("[yellow]Unmapped rooms (kept verbatim — extend your --room-map):[/yellow]")
         for room in sorted(result.unmapped_rooms):
-            console.print(f"  • {room}")
+            console.print(f"  • {_safe(room)}")
     if result.failed:
         console.print("[red]Failures:[/red]")
         for event_id, message in result.failed:
-            console.print(f"  • {event_id}: {message}")
+            console.print(f"  • {_safe(event_id)}: {_safe(message)}")
 
 
 @app.command()
@@ -208,9 +158,39 @@ def migrate(
         )
         raise typer.Exit(code=2)
 
-    rooms = _load_room_map(room_map) if room_map is not None else {}
-    attendees = _load_room_map(attendee_map) if attendee_map is not None else {}
-    domains = _parse_domain_rules(map_domain or [])
+    try:
+        rooms = load_address_map(room_map, "Room map") if room_map is not None else {}
+        attendees = (
+            load_address_map(attendee_map, "Attendee map") if attendee_map is not None else {}
+        )
+        domains = parse_domain_rules(map_domain or [])
+    except InvalidConfigError as error:
+        console.print(f"[red]{_safe(str(error))}[/red]")
+        raise typer.Exit(code=1) from error
+
+    try:
+        _run_wizard(
+            client_secret,
+            rooms=rooms,
+            attendees=attendees,
+            domains=domains,
+            send_updates=send_updates,
+            dry_run=dry_run,
+        )
+    except CalMoveError as error:
+        console.print(f"[red]{_safe(str(error))}[/red]")
+        raise typer.Exit(code=1) from error
+
+
+def _run_wizard(
+    client_secret: Path,
+    *,
+    rooms: dict[str, str],
+    attendees: dict[str, str],
+    domains: dict[str, str],
+    send_updates: SendUpdates,
+    dry_run: bool,
+) -> None:
     store = KeyringTokenStore()
 
     console.print("[bold]Step 1 — sign in to the old (source) workspace[/bold]")
@@ -224,8 +204,8 @@ def migrate(
     destination_calendar = prompts.pick_calendar(
         console, destination_calendars, role_label="destination", require_writable=True
     )
-    source_address = _primary_address(source_calendars)
-    forward_address = _primary_address(destination_calendars)
+    source_address = primary_address(source_calendars)
+    forward_address = primary_address(destination_calendars)
     if forward_address is None:
         console.print(
             "[yellow]No primary calendar found on the destination account — invited "
@@ -248,9 +228,9 @@ def migrate(
         forward_address=forward_address,
     )
     console.print("[bold]Step 4 — dry run[/bold]")
-    plan = MigrateCalendarUseCase(source, destination, _SilentReporter(), forwarder=source).execute(
-        plan_request
-    )
+    plan = MigrateCalendarUseCase(
+        source, destination, NullReporter(), forwarder=source, responder=destination
+    ).execute(plan_request)
     _print_plan(plan)
 
     if dry_run:
@@ -258,8 +238,14 @@ def migrate(
         return
 
     if plan.created == plan.updated == plan.deleted == plan.forwarded == 0:
-        console.print("Nothing to migrate.")
-        return
+        if not plan.failed:
+            console.print("Nothing to migrate.")
+            return
+        console.print(
+            f"[yellow]Nothing can be migrated automatically — {len(plan.failed)} "
+            "item(s) need attention (see the failures above).[/yellow]"
+        )
+        raise typer.Exit(code=1)
 
     if not prompts.confirm_migration(console):
         console.print("Aborted — nothing was written.")
@@ -279,7 +265,7 @@ def migrate(
         forward_address=forward_address,
     )
     result = MigrateCalendarUseCase(
-        source, destination, ConsoleReporter(console), forwarder=source
+        source, destination, ConsoleReporter(console), forwarder=source, responder=destination
     ).execute(request)
     _print_report(result)
 

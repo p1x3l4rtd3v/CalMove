@@ -112,6 +112,11 @@ docker run --rm -p 8080:8080 \
   calmove-web
 ```
 
+Alternatively, bake the secret into a privately-hosted image at build time:
+`docker build --secret id=client_secret,src=/path/to/web_client_secret.json -t calmove-web .`
+— then run without the volume and `-e CALMOVE_WEB_CLIENT_SECRET` (it defaults to the baked
+`/app/client_secret.json`).
+
 Terminate TLS at a reverse proxy in front of the container. Optional:
 `CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_ATTENDEE_MAP` (attendee-map JSON
 path), `CALMOVE_WEB_DOMAIN_MAP` (e.g. `old-company.com=new-company.com,other.com=new.com`),

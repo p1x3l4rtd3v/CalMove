@@ -207,7 +207,7 @@ class TestEventToApi:
         private = payload.get("extendedProperties", {}).get("private", {})
         assert "calmove-source-id" not in private
 
-    def test_request_meet_emits_create_request_and_appends_old_link(self) -> None:
+    def test_request_meet_emits_create_request_without_note(self) -> None:
         source = {**TIMED_PAYLOAD, "hangoutLink": "https://meet.google.com/old-link"}
         payload = event_to_api(event_from_api(source), request_meet=True)
 
@@ -215,13 +215,35 @@ class TestEventToApi:
         assert create_request["conferenceSolutionKey"]["type"] == "hangoutsMeet"
         assert isinstance(create_request["requestId"], str)
         assert create_request["requestId"]
+        # request_meet controls only the conference createRequest; the migration
+        # note is governed by annotate_original_link alone.
+        assert payload["description"] == "Agenda in the doc"
+
+    def test_annotate_original_link_appends_note_without_create_request(self) -> None:
+        source = {**TIMED_PAYLOAD, "hangoutLink": "https://meet.google.com/old-link"}
+        payload = event_to_api(event_from_api(source), annotate_original_link=True)
+
+        assert "conferenceData" not in payload
         assert payload["description"].startswith("Agenda in the doc")
         assert payload["description"].endswith(
             "\n\n[Migrated by CalMove — original meeting link: https://meet.google.com/old-link]"
         )
 
-    def test_request_meet_without_conference_link_is_noop(self) -> None:
-        payload = event_to_api(event_from_api(TIMED_PAYLOAD), request_meet=True)
+    def test_create_flags_emit_create_request_and_note(self) -> None:
+        source = {**TIMED_PAYLOAD, "hangoutLink": "https://meet.google.com/old-link"}
+        payload = event_to_api(
+            event_from_api(source), request_meet=True, annotate_original_link=True
+        )
+
+        assert "createRequest" in payload["conferenceData"]
+        assert payload["description"].endswith(
+            "\n\n[Migrated by CalMove — original meeting link: https://meet.google.com/old-link]"
+        )
+
+    def test_flags_without_conference_link_are_noop(self) -> None:
+        payload = event_to_api(
+            event_from_api(TIMED_PAYLOAD), request_meet=True, annotate_original_link=True
+        )
         assert "conferenceData" not in payload
         assert payload.get("description", "") == "Agenda in the doc"
 
@@ -269,6 +291,6 @@ class TestUnicodeFidelity:
             "description": "Chuẩn bị báo cáo 📈",
             "hangoutLink": "https://meet.google.com/old-link",
         }
-        payload = event_to_api(event_from_api(source), request_meet=True)
+        payload = event_to_api(event_from_api(source), annotate_original_link=True)
         assert payload["description"].startswith("Chuẩn bị báo cáo 📈")
         assert "https://meet.google.com/old-link" in payload["description"]

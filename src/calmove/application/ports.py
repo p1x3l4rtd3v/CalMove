@@ -13,6 +13,8 @@ class MigratedEvent:
 
     destination_id: str
     fingerprint: str | None  # None: migrated by a pre-fingerprint version → update once
+    trusted: bool = True  # created by this user AND marker payload is well-formed
+    duplicate_ids: tuple[str, ...] = ()  # other destination events carrying the same marker
 
 
 class CalendarReader(Protocol):
@@ -48,8 +50,6 @@ class CalendarWriter(Protocol):
 
     def delete_event(self, calendar_id: str, destination_id: str, *, send_updates: str) -> None: ...
 
-    def respond_to_invitation(self, event_id: str, email: str, response_status: str) -> None: ...
-
     def apply_exception(
         self,
         calendar_id: str,
@@ -58,6 +58,12 @@ class CalendarWriter(Protocol):
         *,
         send_updates: str,
     ) -> None: ...
+
+
+class InvitationResponder(Protocol):
+    """Answers invitations on behalf of the *destination* account."""
+
+    def respond_to_invitation(self, event_id: str, email: str, response_status: str) -> None: ...
 
 
 class InviteForwarder(Protocol):

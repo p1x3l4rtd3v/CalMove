@@ -11,3 +11,7 @@ class InvalidDateRangeError(CalMoveError):
 
 class MigrationError(CalMoveError):
     """Raised when migrating an event to the destination calendar fails."""
+
+
+class InvalidConfigError(CalMoveError):
+    """Raised when user-supplied configuration (files or CLI rules) is malformed."""

@@ -10,7 +10,7 @@
   <tr><th>Problems</th><td>{{ plan.failed | length }}</td></tr>
 </table>
 {% if plan.unmapped_rooms %}
-<p class="error">Rooms without a mapping in the new workspace (will be dropped):</p>
+<p class="error">Rooms with no mapping for the new workspace (kept verbatim &mdash; ask your admin to extend the room map):</p>
 <ul>{% for room in plan.unmapped_rooms | sort %}<li>{{ room }}</li>{% endfor %}</ul>
 {% endif %}
 {% if plan.failed %}
@@ -24,7 +24,11 @@
   <button type="submit">Migrate</button>
 </form>
 {% else %}
+{% if plan.failed %}
+<p class="error">Everything else is in sync, but {{ plan.failed | length }} items need attention.</p>
+{% else %}
 <p>Everything is already in sync — nothing to do.</p>
+{% endif %}
 <form method="post" action="{{ url_for('finish') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <button type="submit">Finish</button>

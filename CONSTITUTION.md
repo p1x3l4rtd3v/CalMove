@@ -25,7 +25,8 @@ MAY) are normative. See `docs/SPECIFICATION.md` for the full technical specifica
 ## Article 2 — Ports and Adapters
 
 1. The application layer MUST depend exclusively on the `typing.Protocol` ports defined in
-   `calmove/application/ports.py` (`CalendarReader`, `CalendarWriter`, `MigrationReporter`).
+   `calmove/application/ports.py` (currently `CalendarReader`, `CalendarWriter`,
+   `InviteForwarder`, `InvitationResponder`, `MigrationReporter`).
 2. New integrations MUST be added as adapters in the infrastructure layer implementing an
    existing or new port.
 3. SDK types (API dicts, credential objects, HTTP errors) MUST NOT leak inward past the

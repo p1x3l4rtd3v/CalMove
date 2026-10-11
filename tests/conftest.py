@@ -35,6 +35,8 @@ def synced(
     *,
     fingerprint: str | None = "",
     destination_id: str | None = None,
+    trusted: bool = True,
+    duplicate_ids: tuple[str, ...] = (),
 ) -> dict[str, MigratedEvent]:
     """A ``migrated_events`` entry for ``event``.
 
@@ -47,6 +49,8 @@ def synced(
         event.id: MigratedEvent(
             destination_id=destination_id or f"dest-{event.id}",
             fingerprint=stored,
+            trusted=trusted,
+            duplicate_ids=duplicate_ids,
         )
     }
 
@@ -82,7 +86,6 @@ class FakeWriter:
         self.updated: list[tuple[str, str, CalendarEvent, str, str]] = []
         self.deleted: list[tuple[str, str, str]] = []
         self.applied: list[tuple[str, str, CalendarEvent, str]] = []
-        self.responses: list[tuple[str, str, str]] = []
         self.migrated_calls = 0
 
     def list_calendars(self) -> list[Any]:
@@ -131,11 +134,6 @@ class FakeWriter:
             raise RuntimeError(f"boom:{exception.id}")
         self.applied.append((calendar_id, new_master_id, exception, send_updates))
 
-    def respond_to_invitation(self, event_id: str, email: str, response_status: str) -> None:
-        if f"rsvp:{event_id}" in self.fail_ids:
-            raise RuntimeError(f"boom:rsvp:{event_id}")
-        self.responses.append((event_id, email, response_status))
-
 
 class RecordingReporter:
     """MigrationReporter fake recording every callback."""
@@ -165,6 +163,19 @@ class RecordingReporter:
 
     def event_failed(self, event: CalendarEvent, error: Exception) -> None:
         self.failed.append((event, error))
+
+
+class FakeResponder:
+    """InvitationResponder fake recording responses; injectable failures per event id."""
+
+    def __init__(self, fail_ids: set[str] | tuple[str, ...] = ()) -> None:
+        self.fail_ids = set(fail_ids)
+        self.responses: list[tuple[str, str, str]] = []
+
+    def respond_to_invitation(self, event_id: str, email: str, response_status: str) -> None:
+        if event_id in self.fail_ids:
+            raise RuntimeError(f"boom:rsvp:{event_id}")
+        self.responses.append((event_id, email, response_status))
 
 
 class FakeForwarder:
@@ -213,6 +224,7 @@ def migrate() -> Any:
         migrated: Mapping[str, MigratedEvent] | None = None,
         fail_ids: set[str] | tuple[str, ...] = (),
         forwarder: FakeForwarder | None = None,
+        responder: FakeResponder | None = None,
         **request_overrides: Any,
     ) -> tuple[Any, FakeWriter, RecordingReporter]:
         reader = FakeReader(events=events)
@@ -225,7 +237,7 @@ def migrate() -> Any:
             **request_overrides,
         )
         use_case = MigrateCalendarUseCase(
-            reader=reader, writer=writer, reporter=rec, forwarder=forwarder
+            reader=reader, writer=writer, reporter=rec, forwarder=forwarder, responder=responder
         )
         result = use_case.execute(request)
         return result, writer, rec

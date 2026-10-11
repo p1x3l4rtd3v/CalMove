@@ -1,5 +1,6 @@
 """Immutable domain model for calendars and events."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import datetime
@@ -76,10 +77,19 @@ class CalendarEvent:
         return self.recurring_event_id is not None
 
 
+def primary_address(calendars: Sequence[Calendar]) -> str | None:
+    """The id (address) of the first primary calendar, or ``None`` when absent."""
+    for calendar in calendars:
+        if calendar.primary:
+            return calendar.id
+    return None
+
+
 __all__ = [
     "Attendee",
     "Calendar",
     "CalendarEvent",
     "EventTime",
     "Reminder",
+    "primary_address",
 ]
