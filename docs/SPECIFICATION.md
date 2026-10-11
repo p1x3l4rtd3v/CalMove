@@ -261,6 +261,12 @@ Key behaviors:
       automatically by the real invitation once it materializes. The durable fix for live
       attendance is the organizer inviting the new address; the report says so for each
       placeholder.
+    Two consequences keep re-runs quiet: RSVP mirroring (including the retry) runs only
+    when the destination copy is visible, because mirroring against a copy that cannot
+    exist produced 404 noise; and a trusted placeholder suppresses re-forwarding, because
+    Google drops locally added guests from externally organized copies, so guest-list
+    membership alone cannot prove that a forward already happened. Re-runs therefore
+    count placeholder-backed events as skips, in the plan and in the report.
     Shadow copies created by pre-forwarding CalMove versions carry the marker but no
     placeholder flag and no longer match an owned source event, so the deletion pass
     cleans them up automatically.

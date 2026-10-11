@@ -22,8 +22,10 @@ Flow (CLI): wizard authenticates both workspaces (OAuth loopback, tokens in OS k
 owned top-level events sync via a stored content fingerprint
 (`extendedProperties.private["calmove-source-id"]`/`["calmove-fingerprint"]`: unchanged →
 skip, changed → update, gone → delete); invited events are forwarded to the new account
-(guest-list append + RSVP mirror) instead of copied. Failures never abort the run; they
-land in `MigrationResult.failed`.
+(guest-list append, RSVP mirror only when the destination copy is visible) instead of
+copied, with read-only placeholder copies for undeliverable forwards (external
+organizers); a trusted placeholder suppresses re-forwarding. Failures never abort the
+run; they land in `MigrationResult.failed`.
 
 The application layer talks only to `Protocol`s in `src/calmove/application/ports.py`
 (`CalendarReader`, `CalendarWriter`, `MigrationReporter`). Never import Google SDK types inside

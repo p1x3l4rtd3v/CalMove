@@ -185,6 +185,17 @@ Events they were merely invited to are not copied; the invitation is forwarded t
 chosen destination calendar's address (their new account for a personal migration) and,
 for personal migrations, their RSVP is carried over.
 
+### Invitations from external organizers (Microsoft 365, Exchange)
+
+Forwarding only reaches the organizer's live event when the organizer is on Google
+Calendar. Invitations from external organizers travel as iCal e-mail interop, so the
+forward cannot be delivered. CalMove detects this and copies such events as read-only
+placeholders instead: correct time and content, no attendees, no room, no Meet link, and
+a description note explaining the situation. The report lists every placeholder. The
+durable fix is for the organizer to invite the person's new address; once that invitation
+arrives, the next run removes the placeholder automatically. Re-runs count placeholder
+events as skips and perform no repeated forwards.
+
 ### Group calendars
 
 1. Create the new group calendar in the new Workspace; grant the migrating person
@@ -219,4 +230,5 @@ for personal migrations, their RSVP is carried over.
 | Unmapped rooms flagged in reports | Add the pair to `rooms.json`, restart the container; the next re-run patches affected events in place |
 | "The service is at capacity" | More than 1000 live sessions (or an abuse flood); rate-limit `/start` at the proxy, or restart to clear |
 | Many failures with 401 after a long session | Google access tokens expire after ~1 h; finish the wizard within an hour or restart from Start |
+| Events listed as read-only placeholders | The organizer is external (for example Microsoft 365) and cannot receive the forwarded guest; ask the organizer to invite the new address. The placeholder disappears automatically once the real invitation arrives |
 | Shared destination calendars | Any co-writer of the destination calendar could tamper with CalMove sync markers; CalMove refuses to update/delete events it did not create, flagging them in the report |
