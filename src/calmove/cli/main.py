@@ -205,11 +205,14 @@ def _run_wizard(
         console, destination_calendars, role_label="destination", require_writable=True
     )
     source_address = primary_address(source_calendars)
-    forward_address = primary_address(destination_calendars)
-    if forward_address is None:
+    # Invitations are forwarded to the chosen destination calendar's address: the account
+    # itself for a primary-calendar migration, the group calendar for a team migration.
+    forward_address = destination_calendar.id
+    mirror_rsvp = destination_calendar.primary  # calendars don't RSVP; people do
+    if not mirror_rsvp:
         console.print(
-            "[yellow]No primary calendar found on the destination account — invited "
-            "events cannot be forwarded and will be reported as failures.[/yellow]"
+            "[yellow]Group-calendar destination: invited events will be forwarded to "
+            f"'{destination_calendar.id}' and no RSVP is mirrored.[/yellow]"
         )
 
     console.print("[bold]Step 3 — pick a date range[/bold]")
@@ -226,6 +229,7 @@ def _run_wizard(
         domain_map=domains,
         source_address=source_address,
         forward_address=forward_address,
+        mirror_rsvp=mirror_rsvp,
     )
     console.print("[bold]Step 4 — dry run[/bold]")
     plan = MigrateCalendarUseCase(
@@ -263,6 +267,7 @@ def _run_wizard(
         domain_map=domains,
         source_address=source_address,
         forward_address=forward_address,
+        mirror_rsvp=mirror_rsvp,
     )
     result = MigrateCalendarUseCase(
         source, destination, ConsoleReporter(console), forwarder=source, responder=destination

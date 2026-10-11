@@ -231,12 +231,16 @@ Key behaviors:
     the user rightfully re-creates them, including rooms and a fresh Meet conference.
   - **Invited events** (someone else organizes) are **never copied** — a copy would re-book
     rooms and fork the organizer's meeting. Instead CalMove *forwards the invitation*: it
-    appends the new account's primary address to the guest list of the user's own copy of the
-    event in the old calendar (the API equivalent of "Add guests"), so the new account becomes
-    a real attendee of the organizer's live event — rooms, Meet link, and future organizer
-    edits included. Idempotent by membership: if the new address is already on the guest
-    list, the event is skipped and never touched again (a later manual RSVP change is
-    respected). Right after a successful forward, the new account's RSVP is set to **mirror
+    appends the **chosen destination calendar's address** to the guest list of the user's
+    copy of the event in the old calendar (the API equivalent of "Add guests"). For a
+    personal migration the destination is the primary calendar, whose address *is* the new
+    account — the user becomes a real attendee of the organizer's live event; for a **group
+    calendar** migration the new group calendar itself is invited, so the meeting lands on
+    it for the whole team. Rooms, Meet link, and future organizer edits are included either
+    way. Idempotent by membership: if the forward address is already on the guest list, the
+    event is skipped and never touched again (a later manual RSVP change is respected).
+    Right after a successful forward — **only when the destination is the primary
+    calendar** (calendars don't RSVP; people do) — the new account's RSVP is set to **mirror
     the old account's response** (accepted/tentative/declined; an unanswered invite stays
     unanswered). Requires the organizer's `guestsCanInviteOthers` (Google default: on);
     otherwise the event lands in the failure report. Shadow copies created by

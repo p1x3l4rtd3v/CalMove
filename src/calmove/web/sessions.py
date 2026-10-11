@@ -40,7 +40,6 @@ class WebSession:
     forwarder: InviteForwarder | None = None
     responder: InvitationResponder | None = None
     source_address: str | None = None
-    forward_address: str | None = None
     source_calendars: list[Calendar] = field(default_factory=list)
     destination_calendars: list[Calendar] = field(default_factory=list)
     source_calendar: Calendar | None = None

@@ -786,3 +786,57 @@ class TestRsvpRetry:
         )
         assert result.skipped == 1
         assert result.failed == []
+
+
+class TestGroupCalendarForwarding:
+    """mirror_rsvp=False: forwards target the group calendar; no RSVP is ever set."""
+
+    @staticmethod
+    def _invited(make_event: Any) -> Any:
+        return make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="organizer@old.example"),
+                Attendee(email="team@group.calendar.google.com", response_status="accepted"),
+            ),
+        )
+
+    def test_forward_targets_group_calendar_without_rsvp(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        forwarder = FakeForwarder()
+        responder = FakeResponder()
+        result, _, _ = migrate(
+            [self._invited(make_event)],
+            forwarder=forwarder,
+            responder=responder,
+            source_address="team@group.calendar.google.com",
+            forward_address="new-team@group.calendar.google.com",
+            mirror_rsvp=False,
+        )
+        assert result.forwarded == 1
+        assert forwarder.forwarded[0][2] == "new-team@group.calendar.google.com"
+        assert responder.responses == []  # calendars don't RSVP
+        assert result.failed == []
+
+    def test_no_rsvp_retry_on_rerun_for_group_calendar(self, migrate: Any, make_event: Any) -> None:
+        responder = FakeResponder()
+        already = make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="team@group.calendar.google.com", response_status="accepted"),
+                Attendee(email="new-team@group.calendar.google.com"),  # needsAction
+            ),
+        )
+        result, _, _ = migrate(
+            [already],
+            forwarder=FakeForwarder(),
+            responder=responder,
+            source_address="team@group.calendar.google.com",
+            forward_address="new-team@group.calendar.google.com",
+            mirror_rsvp=False,
+        )
+        assert result.skipped == 1
+        assert responder.responses == []

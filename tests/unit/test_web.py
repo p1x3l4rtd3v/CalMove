@@ -41,6 +41,7 @@ class SourceGateway:
         self.events = list(events)
         self.calendars: list[Calendar] = [SOURCE_CAL]
         self.fetched_ranges: list[DateRange] = []
+        self.forwarded: list[tuple[str, str, str, str]] = []
 
     def list_calendars(self) -> list[Calendar]:
         return list(self.calendars)
@@ -52,7 +53,7 @@ class SourceGateway:
     def forward_invitation(
         self, calendar_id: str, event: CalendarEvent, email: str, *, send_updates: str
     ) -> None:
-        raise AssertionError("no forwards in these fixtures")
+        self.forwarded.append((calendar_id, event.id, email, send_updates))
 
 
 class DestinationGateway:
@@ -477,3 +478,29 @@ class TestUnicodeRendering:
         assert page.status_code == 200
         assert "text/html; charset=utf-8" in page.headers["Content-Type"]
         assert "Lịch công việc — Hà Nội".encode() in page.data
+
+
+class TestGroupCalendarDestination:
+    def test_invited_event_forwarded_to_group_calendar_without_rsvp(self) -> None:
+        from calmove.domain.model import Attendee
+
+        invited = CalendarEvent(
+            id="inv-1",
+            start=EventTime(date_time=datetime(2026, 1, 5, 9, 0, tzinfo=UTC)),
+            end=EventTime(date_time=datetime(2026, 1, 5, 10, 0, tzinfo=UTC)),
+            summary="Board meeting",
+            is_organizer=False,
+            attendees=(Attendee(email="boss@old.example"),),
+        )
+        harness = Harness([invited], [DEST_WRITABLE])  # dst-cal: primary=False → group
+        client = harness.client()
+        csrf = _advance_to_plan(client, harness)
+        session = harness.session_for(client)
+        client.post("/migrate", data={"confirm": "migrate", "csrf": csrf})
+        _wait_for_completion(session)
+
+        assert session.status == "done"
+        # Forward targeted the chosen (non-primary) destination calendar's address…
+        assert harness.source.forwarded == [("src-cal", "inv-1", "dst-cal", "none")]
+        # …and no RSVP was mirrored (calendars don't RSVP).
+        assert harness.destination.responses == []

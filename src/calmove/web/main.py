@@ -259,7 +259,7 @@ def create_app(
             session.destination = gateway
             session.responder = gateway
             session.destination_calendars = calendars
-            session.forward_address = primary_address(calendars)
+            # forward target is derived from the chosen destination calendar at run time
         return redirect(url_for("pick_calendar", role=role))
 
     @app.route("/calendars/<role>", methods=["GET", "POST"])
@@ -455,7 +455,10 @@ def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> 
         attendee_map=config.attendee_map,
         domain_map=config.domain_map,
         source_address=session.source_address,
-        forward_address=session.forward_address,
+        # Forward invitations to the chosen destination calendar's address: the account
+        # itself for a primary-calendar migration, the group calendar for a team one.
+        forward_address=session.destination_calendar.id,
+        mirror_rsvp=session.destination_calendar.primary,
     )
 
 

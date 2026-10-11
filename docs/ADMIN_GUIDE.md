@@ -177,8 +177,24 @@ clear "at capacity" page).
 5. Type `migrate` → watch progress → **Finish** (erases the session).
 
 Re-running later is safe and encouraged: only changed, new, or deleted events are touched.
-Events they were merely invited to are not copied — the invitation is forwarded to their new
-address and their RSVP carried over.
+Events they were merely invited to are not copied — the invitation is forwarded to the
+chosen destination calendar's address (their new account for a personal migration) and,
+for personal migrations, their RSVP is carried over.
+
+### Group calendars
+
+1. Create the new group calendar in the new Workspace; grant the migrating person
+   **writer/owner** on it. Calendar *sharing* is not event data — re-share it with the team
+   yourself afterwards.
+2. Designate **one** runner, ideally the **owner** of the old group calendar (forwarding
+   writes to the old calendar's event copies, and the source scope covers only calendars
+   the user owns — mere writers see those forwards in the failure report).
+3. The runner picks the old group calendar as source and the new one as destination.
+   Events created on the calendar are fully re-created; events the calendar was invited to
+   are forwarded to the **new group calendar's address** (no RSVP is mirrored — calendars
+   don't RSVP; Google tracks their copies automatically).
+4. Re-runs are team-safe as long as everyone targets the same destination calendar — the
+   sync markers prevent duplicates.
 
 ---
 

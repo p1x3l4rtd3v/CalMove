@@ -37,7 +37,8 @@ class MigrationRequest:
     attendee_map: Mapping[str, str] = field(default_factory=dict)  # explicit old → new address
     domain_map: Mapping[str, str] = field(default_factory=dict)  # old domain → new domain
     source_address: str | None = None  # old account's primary e-mail (RSVP mirroring)
-    forward_address: str | None = None  # new account's primary e-mail (forward target)
+    forward_address: str | None = None  # destination calendar's address (forward target)
+    mirror_rsvp: bool = True  # False when the destination is a group calendar (no RSVP)
 
 
 @dataclass
@@ -258,7 +259,11 @@ class MigrateCalendarUseCase:
             self._reporter.event_skipped(event)
             # A prior run forwarded but may have failed to mirror the RSVP: retry while
             # the new address still shows "needsAction"; never override a manual answer.
-            if not request.dry_run and guest.response_status == "needsAction":
+            if (
+                request.mirror_rsvp
+                and not request.dry_run
+                and guest.response_status == "needsAction"
+            ):
                 self._mirror_rsvp(request, result, event, forward_address)
             return
         if request.dry_run:
@@ -280,7 +285,8 @@ class MigrateCalendarUseCase:
             return
         result.forwarded += 1
         self._reporter.event_forwarded(event)
-        self._mirror_rsvp(request, result, event, forward_address)
+        if request.mirror_rsvp:
+            self._mirror_rsvp(request, result, event, forward_address)
 
     def _mirror_rsvp(
         self,
