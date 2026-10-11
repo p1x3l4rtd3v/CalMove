@@ -1027,3 +1027,54 @@ class TestPlaceholderFallback:
         assert result.forwarded == 1
         assert writer.created == []
         assert result.placeholder_events == []
+
+
+class TestMirrorVisibilityGate:
+    def test_invisible_event_gets_placeholder_without_mirror_attempt(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        """Regression: M365-organized events produced 'RSVP mirror failed: 404' noise.
+
+        Already a guest, old account answered, but the destination copy can never
+        exist: the run must create the placeholder and never call the responder.
+        """
+        responder = FakeResponder()
+        invited = make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="organizer@umb.example"),
+                Attendee(email="me@old.example", response_status="accepted"),
+                Attendee(email="me@new.example"),  # forwarded by an earlier run
+            ),
+        )
+        result, writer, _ = migrate(
+            [invited],
+            responder=responder,
+            invisible_ids={"inv-1"},
+            source_address="me@old.example",
+            forward_address="me@new.example",
+        )
+        assert responder.responses == []  # no mirror against a missing copy
+        assert result.failed == []  # and no 404 noise in the report
+        assert result.placeholder_events == ["inv-1"]
+        assert writer.placeholders == [("create", "inv-1")]
+
+    def test_visible_event_still_gets_the_mirror_retry(self, migrate: Any, make_event: Any) -> None:
+        responder = FakeResponder()
+        invited = make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="me@old.example", response_status="accepted"),
+                Attendee(email="me@new.example"),  # still needsAction
+            ),
+        )
+        result, _, _ = migrate(
+            [invited],
+            responder=responder,
+            source_address="me@old.example",
+            forward_address="me@new.example",
+        )
+        assert responder.responses == [("inv-1", "me@new.example", "accepted")]
+        assert result.failed == []

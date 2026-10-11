@@ -109,8 +109,7 @@ class MigrateCalendarUseCase:
                 request, result, existing, event, exceptions_by_master.get(event.id, [])
             )
         for event in invited:
-            self._forward(request, result, event)
-            self._ensure_visible(request, result, existing, event)
+            self._handle_invited(request, result, existing, event)
         self._delete_vanished(request, result, existing, owned_ids, invited_ids)
         self._fail_orphans(result, exceptions_by_master, owned_ids | invited_ids)
         return result
@@ -265,67 +264,22 @@ class MigrateCalendarUseCase:
                 result.failed.append((exception.id, _MASTER_NOT_MIGRATED))
                 self._reporter.event_failed(exception, MigrationError(_MASTER_NOT_MIGRATED))
 
-    def _forward(
-        self, request: MigrationRequest, result: MigrationResult, event: CalendarEvent
-    ) -> None:
-        """Forward an invited event to the new account instead of copying it."""
-        forward_address = request.forward_address
-        if forward_address is None:
-            result.failed.append((event.id, "no destination account address for forwarding"))
-            return
-        guest = next(
-            (a for a in event.attendees if a.email.lower() == forward_address.lower()), None
-        )
-        if guest is not None:
-            result.skipped += 1
-            self._reporter.event_skipped(event)
-            # A prior run forwarded but may have failed to mirror the RSVP: retry while
-            # the new address still shows "needsAction"; never override a manual answer.
-            if (
-                request.mirror_rsvp
-                and not request.dry_run
-                and guest.response_status == "needsAction"
-            ):
-                self._mirror_rsvp(request, result, event, forward_address)
-            return
-        if request.dry_run:
-            result.forwarded += 1
-            return
-        if self._forwarder is None:
-            result.failed.append((event.id, "forwarding unavailable"))
-            return
-        try:
-            self._forwarder.forward_invitation(
-                request.source_calendar_id,
-                event,
-                forward_address,
-                send_updates=request.send_updates,
-            )
-        except Exception as error:
-            result.failed.append((event.id, str(error)))
-            self._reporter.event_failed(event, error)
-            return
-        result.forwarded += 1
-        self._reporter.event_forwarded(event)
-        if request.mirror_rsvp:
-            self._mirror_rsvp(request, result, event, forward_address)
-
-    def _ensure_visible(
+    def _handle_invited(
         self,
         request: MigrationRequest,
         result: MigrationResult,
         existing: Mapping[str, MigratedEvent],
         event: CalendarEvent,
     ) -> None:
-        """Guarantee an invited event is visible in the destination calendar.
+        """Forward one invited event, then guarantee it is visible in the destination.
 
-        A forward only reaches the organizer's live event for Google-to-Google
-        invitations. External organizers (Microsoft 365/Exchange interop) never see
-        the added guest, so the real invitation cannot materialize; a read-only
-        placeholder copy keeps the new calendar complete until the organizer invites
-        the new address. Placeholders are replaced by the real invitation once it
-        arrives and follow the normal sync rules otherwise.
+        RSVP mirroring only makes sense when the destination copy exists, so
+        visibility is checked first: for external organizers (Microsoft 365
+        interop) the copy can never materialize, and a mirror attempt would just
+        produce a 404 for an event that gets a placeholder anyway.
         """
+        if not self._forward(request, result, event):
+            return
         if request.dry_run:
             return
         prior = existing.get(event.id)
@@ -339,6 +293,79 @@ class MigrateCalendarUseCase:
             result.failed.append((event.id, str(error)))
             self._reporter.event_failed(event, error)
             return
+        if visible and request.mirror_rsvp:
+            self._maybe_mirror(request, result, event)
+        self._ensure_visible(request, result, existing, event, visible=visible)
+
+    def _forward(
+        self, request: MigrationRequest, result: MigrationResult, event: CalendarEvent
+    ) -> bool:
+        """Ensure the forward address is on the guest list; True when it is (or will be)."""
+        forward_address = request.forward_address
+        if forward_address is None:
+            result.failed.append((event.id, "no destination account address for forwarding"))
+            return False
+        guest = next(
+            (a for a in event.attendees if a.email.lower() == forward_address.lower()), None
+        )
+        if guest is not None:
+            result.skipped += 1
+            self._reporter.event_skipped(event)
+            return True
+        if request.dry_run:
+            result.forwarded += 1
+            return True
+        if self._forwarder is None:
+            result.failed.append((event.id, "forwarding unavailable"))
+            return False
+        try:
+            self._forwarder.forward_invitation(
+                request.source_calendar_id,
+                event,
+                forward_address,
+                send_updates=request.send_updates,
+            )
+        except Exception as error:
+            result.failed.append((event.id, str(error)))
+            self._reporter.event_failed(event, error)
+            return False
+        result.forwarded += 1
+        self._reporter.event_forwarded(event)
+        return True
+
+    def _maybe_mirror(
+        self, request: MigrationRequest, result: MigrationResult, event: CalendarEvent
+    ) -> None:
+        """Mirror the old RSVP while the new address has not answered yet."""
+        forward_address = request.forward_address
+        if forward_address is None:
+            return
+        guest = next(
+            (a for a in event.attendees if a.email.lower() == forward_address.lower()), None
+        )
+        if guest is not None and guest.response_status != "needsAction":
+            return  # the new account already answered; never override
+        self._mirror_rsvp(request, result, event, forward_address)
+
+    def _ensure_visible(
+        self,
+        request: MigrationRequest,
+        result: MigrationResult,
+        existing: Mapping[str, MigratedEvent],
+        event: CalendarEvent,
+        *,
+        visible: bool,
+    ) -> None:
+        """Guarantee an invited event is visible in the destination calendar.
+
+        A forward only reaches the organizer's live event for Google-to-Google
+        invitations. External organizers (Microsoft 365/Exchange interop) never see
+        the added guest, so the real invitation cannot materialize; a read-only
+        placeholder copy keeps the new calendar complete until the organizer invites
+        the new address. Placeholders are replaced by the real invitation once it
+        arrives and follow the normal sync rules otherwise.
+        """
+        prior = existing.get(event.id)
         prior_placeholder = prior if prior is not None and prior.placeholder else None
         if visible:
             if prior_placeholder is not None:
