@@ -8,7 +8,7 @@ from calmove.domain.model import Attendee, Calendar, CalendarEvent, EventTime, R
 
 SOURCE_ID_KEY = "calmove-source-id"
 FINGERPRINT_KEY = "calmove-fingerprint"
-_MIGRATION_NOTE = "\n\n[Migrated by CalMove — original meeting link: {link}]"
+_MIGRATION_NOTE = "\n\n[Migrated by CalMove - original meeting link: {link}]"
 
 
 def calendar_from_api(payload: dict[str, Any]) -> Calendar:

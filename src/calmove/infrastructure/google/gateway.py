@@ -79,7 +79,7 @@ class GoogleCalendarGateway:
         their master, never tracked as independent events.
 
         A marker is ``trusted`` only when the destination event was created by this
-        account (``creator.self``) and its stored fingerprint is well-formed — a
+        account (``creator.self``) and its stored fingerprint is well-formed; a
         copied/forwarded event carrying a stale marker must not be silently updated
         or deleted. When several destination events carry the same source-id marker,
         the first one stays primary and the others are reported as ``duplicate_ids``.
@@ -159,8 +159,8 @@ class GoogleCalendarGateway:
     ) -> None:
         """Patch the full migrated field set onto the existing destination event.
 
-        ``patch`` (merge) keeps destination-only state — notably the fresh Meet
-        conference created on first migration — while attendees/recurrence are always
+        ``patch`` (merge) keeps destination-only state (notably the fresh Meet
+        conference created on first migration) while attendees/recurrence are always
         sent (empty lists clear fields removed at the source).
         """
         body = event_to_api(
@@ -215,15 +215,18 @@ class GoogleCalendarGateway:
     def respond_to_invitation(self, event_id: str, email: str, response_status: str) -> None:
         """Set the new account's RSVP on its own copy of a freshly forwarded event.
 
-        ``attendeesOmitted=True`` restricts the patch to the listed attendee — the
-        documented way for an attendee to change only their own response.
+        ``attendeesOmitted`` is a field of the event *body*, not a query parameter:
+        together with a partial attendee list it is the documented way for an
+        attendee to change only their own response without touching other guests.
         """
         self._execute(
             self._service.events().patch(
                 calendarId="primary",
                 eventId=event_id,
-                body={"attendees": [{"email": email, "responseStatus": response_status}]},
-                attendeesOmitted=True,
+                body={
+                    "attendees": [{"email": email, "responseStatus": response_status}],
+                    "attendeesOmitted": True,
+                },
                 sendUpdates="none",
             )
         )

@@ -56,7 +56,16 @@ class _Resource:
     def insert(self, **kwargs: Any) -> _Request:
         return self._invoke("insert", kwargs)
 
+    # The real discovery client rejects unknown query parameters with a TypeError;
+    # mirror that strictness so body-vs-parameter mistakes fail here too.
+    _PATCH_PARAMS = frozenset(
+        {"calendarId", "eventId", "body", "sendUpdates", "conferenceDataVersion"}
+    )
+
     def patch(self, **kwargs: Any) -> _Request:
+        unexpected = set(kwargs) - self._PATCH_PARAMS
+        if unexpected:
+            raise TypeError(f"Got an unexpected keyword argument {sorted(unexpected)[0]}")
         return self._invoke("patch", kwargs)
 
     def delete(self, **kwargs: Any) -> _Request:
@@ -237,7 +246,7 @@ class TestCreateEvent:
         body = kwargs["body"]
         assert "createRequest" in body["conferenceData"]
         assert body["description"].endswith(
-            "\n\n[Migrated by CalMove — original meeting link: https://meet.google.com/old-link]"
+            "\n\n[Migrated by CalMove - original meeting link: https://meet.google.com/old-link]"
         )
         private = body["extendedProperties"]["private"]
         assert private == {"calmove-source-id": "evt-1", "calmove-fingerprint": VALID_FP}
@@ -267,7 +276,7 @@ class TestUpdateEvent:
         # The note is re-applied on update; the fresh Meet conference is never requested.
         assert "conferenceData" not in body
         assert body["description"].endswith(
-            "\n\n[Migrated by CalMove — original meeting link: https://meet.google.com/old-link]"
+            "\n\n[Migrated by CalMove - original meeting link: https://meet.google.com/old-link]"
         )
 
 
@@ -332,3 +341,18 @@ class TestMatches:
         target = EventTime(date=datetime(2026, 1, 5).date())
         assert _matches(target, {"date": "2026-01-05"})
         assert not _matches(target, {"date": "2026-01-06"})
+
+
+class TestRespondToInvitation:
+    def test_attendees_omitted_travels_in_body_not_as_parameter(self) -> None:
+        """Regression: attendeesOmitted as a query parameter raised TypeError in production."""
+        service = FakeService(events_script={"patch": [{}]})
+        GoogleCalendarGateway(service).respond_to_invitation("evt-1", "me@new.example", "accepted")
+        ((method, kwargs),) = service.events_resource.calls
+        assert method == "patch"
+        assert kwargs["calendarId"] == "primary"
+        assert kwargs["body"] == {
+            "attendees": [{"email": "me@new.example", "responseStatus": "accepted"}],
+            "attendeesOmitted": True,
+        }
+        assert "attendeesOmitted" not in kwargs

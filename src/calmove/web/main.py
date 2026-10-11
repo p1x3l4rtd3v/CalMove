@@ -1,4 +1,4 @@
-"""CalMove web — Flask wizard and second composition root.
+"""CalMove web: Flask wizard and second composition root.
 
 Stateless by design: all per-user state (OAuth-backed gateways, calendar lists,
 results) lives in the RAM-only :class:`SessionStore`. The service holds no admin or
@@ -59,7 +59,7 @@ class WebConfig:
     attendee_map: Mapping[str, str] = field(default_factory=dict)
     domain_map: Mapping[str, str] = field(default_factory=dict)
     session_ttl: float = DEFAULT_TTL_SECONDS
-    host: str = "0.0.0.0"  # noqa: S104 — containerized service behind a reverse proxy
+    host: str = "0.0.0.0"  # noqa: S104 - containerized service behind a reverse proxy
     port: int = 8080
 
     @classmethod

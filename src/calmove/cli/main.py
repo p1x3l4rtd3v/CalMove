@@ -1,4 +1,4 @@
-"""CalMove CLI — Typer app and composition root."""
+"""CalMove CLI: Typer app and composition root."""
 
 from enum import StrEnum
 from pathlib import Path
@@ -65,7 +65,7 @@ class ConsoleReporter:
         self._console.print(f"[yellow]skipped[/yellow]  {self._label(event)}")
 
     def event_failed(self, event: CalendarEvent, error: Exception) -> None:
-        self._console.print(f"[red]failed[/red]   {self._label(event)} — {_safe(str(error))}")
+        self._console.print(f"[red]failed[/red]   {self._label(event)}: {_safe(str(error))}")
 
 
 def _build_gateway(
@@ -106,7 +106,7 @@ def _print_report(result: MigrationResult) -> None:
 
 def _print_details(result: MigrationResult) -> None:
     if result.unmapped_rooms:
-        console.print("[yellow]Unmapped rooms (kept verbatim — extend your --room-map):[/yellow]")
+        console.print("[yellow]Unmapped rooms (kept verbatim; extend your --room-map):[/yellow]")
         for room in sorted(result.unmapped_rooms):
             console.print(f"  • {_safe(room)}")
     if result.failed:
@@ -193,12 +193,12 @@ def _run_wizard(
 ) -> None:
     store = KeyringTokenStore()
 
-    console.print("[bold]Step 1 — sign in to the old (source) workspace[/bold]")
+    console.print("[bold]Step 1: sign in to the old (source) workspace[/bold]")
     source = _build_gateway("source", SOURCE_SCOPES, client_secret, store)
     source_calendars = source.list_calendars()
     source_calendar = prompts.pick_calendar(console, source_calendars, role_label="source")
 
-    console.print("[bold]Step 2 — sign in to the new (destination) workspace[/bold]")
+    console.print("[bold]Step 2: sign in to the new (destination) workspace[/bold]")
     destination = _build_gateway("destination", DESTINATION_SCOPES, client_secret, store)
     destination_calendars = destination.list_calendars()
     destination_calendar = prompts.pick_calendar(
@@ -215,7 +215,7 @@ def _run_wizard(
             f"'{destination_calendar.id}' and no RSVP is mirrored.[/yellow]"
         )
 
-    console.print("[bold]Step 3 — pick a date range[/bold]")
+    console.print("[bold]Step 3: pick a date range[/bold]")
     date_range = prompts.prompt_date_range(console)
 
     plan_request = MigrationRequest(
@@ -231,14 +231,14 @@ def _run_wizard(
         forward_address=forward_address,
         mirror_rsvp=mirror_rsvp,
     )
-    console.print("[bold]Step 4 — dry run[/bold]")
+    console.print("[bold]Step 4: dry run[/bold]")
     plan = MigrateCalendarUseCase(
         source, destination, NullReporter(), forwarder=source, responder=destination
     ).execute(plan_request)
     _print_plan(plan)
 
     if dry_run:
-        console.print("Dry run requested — nothing was written.")
+        console.print("Dry run requested; nothing was written.")
         return
 
     if plan.created == plan.updated == plan.deleted == plan.forwarded == 0:
@@ -246,16 +246,16 @@ def _run_wizard(
             console.print("Nothing to migrate.")
             return
         console.print(
-            f"[yellow]Nothing can be migrated automatically — {len(plan.failed)} "
+            f"[yellow]Nothing can be migrated automatically: {len(plan.failed)} "
             "item(s) need attention (see the failures above).[/yellow]"
         )
         raise typer.Exit(code=1)
 
     if not prompts.confirm_migration(console):
-        console.print("Aborted — nothing was written.")
+        console.print("Aborted; nothing was written.")
         raise typer.Exit(code=1)
 
-    console.print("[bold]Step 5 — migrating[/bold]")
+    console.print("[bold]Step 5: migrating[/bold]")
     request = MigrationRequest(
         source_calendar_id=source_calendar.id,
         destination_calendar_id=destination_calendar.id,

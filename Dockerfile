@@ -1,5 +1,5 @@
 # check=skip=SecretsUsedInArgOrEnv  (false positive: the ENV below holds a file PATH, not a secret)
-# CalMove web — stateless migration wizard (spec §10).
+# CalMove web: stateless migration wizard (spec §10).
 # No volumes, no writable state: tokens and event data live only in process RAM.
 # Bases are digest-pinned (supply-chain); bump digests deliberately when updating.
 

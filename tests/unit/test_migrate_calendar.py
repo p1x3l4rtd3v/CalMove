@@ -647,7 +647,7 @@ class TestMarkerTrust:
             (
                 "gone-1",
                 "destination event carries a CalMove marker but was not created by this user"
-                " — left untouched for safety",
+                ", left untouched for safety",
             )
         ]
 

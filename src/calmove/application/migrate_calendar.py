@@ -1,4 +1,4 @@
-"""The calendar migration use case — pure orchestration over the ports."""
+"""The calendar migration use case: pure orchestration over the ports."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -19,7 +19,7 @@ from calmove.domain.model import Attendee, CalendarEvent
 _MASTER_NOT_MIGRATED = "master not migrated"
 _UNTRUSTED_MARKER = (
     "destination event carries a CalMove marker but was not created by this user"
-    " — left untouched for safety"
+    ", left untouched for safety"
 )
 _ANSWERED = frozenset({"accepted", "tentative", "declined"})
 
@@ -58,7 +58,7 @@ class MigrateCalendarUseCase:
     """Synchronizes source events into the destination calendar, idempotently.
 
     The unit of sync is the top-level event (single or recurring series) the user
-    organizes: a stored content fingerprint decides per event — unchanged → skip,
+    organizes: a stored content fingerprint decides per event. Unchanged → skip,
     changed → update in place (exceptions re-applied), new → create, gone from the
     source → delete the destination copy carrying CalMove's marker. Events the user
     is merely invited to are forwarded to the new account instead of copied.

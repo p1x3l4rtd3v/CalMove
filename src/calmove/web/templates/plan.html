@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<h2>Migration plan (dry run — nothing has been written)</h2>
+<h2>Migration plan (dry run, nothing has been written)</h2>
 <table>
   <tr><th>Would create</th><td>{{ plan.created }}</td></tr>
   <tr><th>Would update (changed at source)</th><td>{{ plan.updated }}</td></tr>
@@ -10,7 +10,7 @@
   <tr><th>Problems</th><td>{{ plan.failed | length }}</td></tr>
 </table>
 {% if plan.unmapped_rooms %}
-<p class="error">Rooms with no mapping for the new workspace (kept verbatim &mdash; ask your admin to extend the room map):</p>
+<p class="error">Rooms with no mapping for the new workspace (kept verbatim; ask your admin to extend the room map):</p>
 <ul>{% for room in plan.unmapped_rooms | sort %}<li>{{ room }}</li>{% endfor %}</ul>
 {% endif %}
 {% if plan.failed %}
@@ -19,7 +19,7 @@
 {% if plan.created or plan.updated or plan.deleted or plan.forwarded %}
 <form method="post" action="{{ url_for('migrate') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
-  <label>Type <strong>migrate</strong> to start for real:
+  <label>Type <strong>migrate</strong> to start the migration:
     <input type="text" name="confirm" autocomplete="off"></label>
   <button type="submit">Migrate</button>
 </form>
@@ -27,7 +27,7 @@
 {% if plan.failed %}
 <p class="error">Everything else is in sync, but {{ plan.failed | length }} items need attention.</p>
 {% else %}
-<p>Everything is already in sync — nothing to do.</p>
+<p>Everything is already in sync; nothing to do.</p>
 {% endif %}
 <form method="post" action="{{ url_for('finish') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">

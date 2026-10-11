@@ -1,6 +1,6 @@
 # CalMove
 
-Migrate a Google Calendar from an old Google Workspace to a new one — without losing the data
+Migrate a Google Calendar from an old Google Workspace to a new one without losing the data
 a plain ICS export/import strips. Exporting a calendar as `.ics` and re-importing it loses
 invited attendees, booked rooms (resource attendees), conference links, and recurrence
 exception details. CalMove instead reads events through the Google Calendar API from the
@@ -41,14 +41,14 @@ uv run calmove migrate --client-secret path/to/client_secret.json
 
 The interactive wizard then:
 
-1. Opens your system browser to log into the **old** workspace (read-only scope) and asks you
+1. Opens your system browser to log into the old workspace (read-only scope) and asks you
    to pick the source calendar by number.
-2. Opens the browser again to log into the **new** workspace (events scope) and asks for the
+2. Opens the browser again to log into the new workspace (events scope) and asks for the
    destination calendar.
 3. Asks for a date range:
-   - `1` — from today onward
-   - `2` — everything
-   - `3` — custom `from`/`to` dates
+   - `1`: from today onward
+   - `2`: everything
+   - `3`: custom `from`/`to` dates
 4. Shows a dry-run plan table (create / skip counts, unmapped rooms) and asks for a typed
    confirmation before writing anything.
 5. Creates the events and prints a final report (created / skipped / failed).
@@ -61,7 +61,7 @@ The interactive wizard then:
 | `--room-map rooms.json` | Translate room resource e-mails between workspaces (see below). |
 | `--map-domain old=new` | Rewrite attendee domains on owned events, e.g. `--map-domain old-company.com=new-company.com` (repeatable). Local parts stay; rooms and other domains untouched. |
 | `--attendee-map attendees.json` | Explicit old → new attendee e-mails for people whose local part changes (beats domain rules). |
-| `--send-updates [none\|all\|externalOnly]` | Invitation e-mails for created events. Default `none` — attendees are not spammed. |
+| `--send-updates [none\|all\|externalOnly]` | Invitation e-mails for created events. Default `none`: attendees receive no invitation e-mails. |
 
 Room map example (`rooms.json`):
 
@@ -72,15 +72,15 @@ Room map example (`rooms.json`):
 ```
 
 Unmapped rooms are kept verbatim and flagged in the report. Attendee rewriting plus the
-default `sendUpdates=none` means colleagues' events simply appear in their new calendars —
-no invitation e-mails; adding a rule later patches already-migrated events in place.
+default `sendUpdates=none` means colleagues' events appear in their new calendars without
+invitation e-mails; adding a rule later patches already-migrated events in place.
 
-Re-running a migration **synchronizes**: events carry a `calmove-source-id` marker and a
+Re-running a migration synchronizes: events carry a `calmove-source-id` marker and a
 content fingerprint, so a re-run skips unchanged events, updates changed ones in place,
 deletes destination copies whose source event is gone, and creates new ones. Events you were
-merely *invited to* are never copied — CalMove forwards the invitation to your new address
+merely *invited to* are never copied. CalMove forwards the invitation to your new address
 (and mirrors your RSVP), so the new account joins the organizer's live event. Interrupted
-runs can simply be resumed.
+runs can be resumed.
 
 ### Logout
 
@@ -94,7 +94,7 @@ Removes the stored OAuth tokens from the OS keyring.
 
 For staff who cannot install software: the same wizard as a browser flow
 (spec [§10](docs/SPECIFICATION.md#10-web-deployment-mode-docker)). Each migration runs solely
-under the OAuth grants of the user driving that browser session — the service never holds
+under the OAuth grants of the user driving that browser session. The service never holds
 admin or service-account credentials, persists nothing (tokens and event data live only in
 per-session server RAM, erased on finish or after 30 minutes idle), and sessions cannot see
 each other.
@@ -114,8 +114,8 @@ docker run --rm -p 8080:8080 \
 
 Alternatively, bake the secret into a privately-hosted image at build time:
 `docker build --secret id=client_secret,src=/path/to/web_client_secret.json -t calmove-web .`
-— then run without the volume and `-e CALMOVE_WEB_CLIENT_SECRET` (it defaults to the baked
-`/app/client_secret.json`).
+Then run without the volume and without `-e CALMOVE_WEB_CLIENT_SECRET` (it defaults to the
+baked `/app/client_secret.json`).
 
 Terminate TLS at a reverse proxy in front of the container. Optional:
 `CALMOVE_WEB_ROOM_MAP` (room-map JSON path), `CALMOVE_WEB_ATTENDEE_MAP` (attendee-map JSON

@@ -1,1 +1,1 @@
-"""Domain layer — pure data and behavior, stdlib only."""
+"""Domain layer: pure data and behavior, stdlib only."""

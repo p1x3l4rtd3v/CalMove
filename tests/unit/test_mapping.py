@@ -226,7 +226,7 @@ class TestEventToApi:
         assert "conferenceData" not in payload
         assert payload["description"].startswith("Agenda in the doc")
         assert payload["description"].endswith(
-            "\n\n[Migrated by CalMove — original meeting link: https://meet.google.com/old-link]"
+            "\n\n[Migrated by CalMove - original meeting link: https://meet.google.com/old-link]"
         )
 
     def test_create_flags_emit_create_request_and_note(self) -> None:
@@ -237,7 +237,7 @@ class TestEventToApi:
 
         assert "createRequest" in payload["conferenceData"]
         assert payload["description"].endswith(
-            "\n\n[Migrated by CalMove — original meeting link: https://meet.google.com/old-link]"
+            "\n\n[Migrated by CalMove - original meeting link: https://meet.google.com/old-link]"
         )
 
     def test_flags_without_conference_link_are_noop(self) -> None:

@@ -1,7 +1,7 @@
 """RAM-only, TTL-evicted per-browser-session state.
 
-Privacy contract (Constitution art. 6): everything in here — OAuth-backed gateways,
-calendar lists, migration results — lives exclusively in process memory, keyed by an
+Privacy contract (Constitution art. 6): everything in here (OAuth-backed gateways,
+calendar lists, migration results) lives exclusively in process memory, keyed by an
 unguessable session ID. Nothing is ever written to disk, a database, or logs, and no
 code path exposes one session to another.
 """
@@ -97,7 +97,7 @@ class SessionStore:
     """Thread-safe in-memory store with lazy TTL eviction; no persistence anywhere.
 
     ``max_sessions`` caps memory use and keeps the O(n) eviction scan trivially
-    cheap — an unauthenticated flood of ``create()`` calls hits the cap instead of
+    cheap; an unauthenticated flood of ``create()`` calls hits the cap instead of
     growing the process.
     """
 

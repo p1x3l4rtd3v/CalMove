@@ -2,14 +2,14 @@
 
 Pure and deterministic: the fingerprint is computed from the *source* event (after
 room mapping) on every run and compared against the copy stored on the destination
-event — destination drift (fresh Meet links, Google-side normalization) never
+event; destination drift (fresh Meet links, Google-side normalization) never
 causes spurious updates because the destination content itself is never hashed.
 
 The hash covers an *explicit, versioned projection* of exactly the synchronized
 fields rather than ``dataclasses.asdict``: adding a field to the domain model no
 longer silently changes every fingerprint (forcing a full re-update of all
-previously migrated events). Evolving the projection — adding/removing a field or
-changing a serialization — MUST be done deliberately by bumping the ``"v"`` key.
+previously migrated events). Evolving the projection (adding/removing a field or
+changing a serialization) MUST be done deliberately by bumping the ``"v"`` key.
 
 Attendees are serialized sorted by e-mail, so attendee *order* never affects the
 fingerprint. ``is_organizer`` is deliberately excluded: it describes the viewer's
