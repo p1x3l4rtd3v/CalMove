@@ -16,18 +16,28 @@
 {% if plan.failed %}
 <ul class="error">{% for event_id, msg in plan.failed %}<li>{{ event_id }}: {{ msg }}</li>{% endfor %}</ul>
 {% endif %}
-{% if plan.created or plan.updated or plan.deleted or plan.forwarded %}
+{% if plan.created or plan.updated or plan.deleted or plan.forwarded or plan.skipped %}
+{% if not (plan.created or plan.updated or plan.deleted or plan.forwarded) %}
+{% if plan.failed %}
+<p class="error">Everything else is in sync, but {{ plan.failed | length }} items need attention.</p>
+{% else %}
+<p>Everything is already in sync. Run again with the checkbox below to send invitation
+   e-mails for events that were migrated silently.</p>
+{% endif %}
+{% endif %}
 <form method="post" action="{{ url_for('migrate') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label><input type="checkbox" name="notify">
+    Send invitation e-mails to attendees (also re-sends for already migrated events)</label>
   <label>Type <strong>migrate</strong> to start the migration:
     <input type="text" name="confirm" autocomplete="off"></label>
   <button type="submit">Migrate</button>
 </form>
 {% else %}
 {% if plan.failed %}
-<p class="error">Everything else is in sync, but {{ plan.failed | length }} items need attention.</p>
+<p class="error">Nothing to migrate, but {{ plan.failed | length }} items need attention.</p>
 {% else %}
-<p>Everything is already in sync; nothing to do.</p>
+<p>Nothing to migrate.</p>
 {% endif %}
 <form method="post" action="{{ url_for('finish') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">

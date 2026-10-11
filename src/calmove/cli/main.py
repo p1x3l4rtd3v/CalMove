@@ -144,6 +144,14 @@ def migrate(
         SendUpdates,
         typer.Option("--send-updates", help="Whether Google notifies attendees."),
     ] = SendUpdates.none,
+    resend_invitations: Annotated[
+        bool,
+        typer.Option(
+            "--resend-invitations",
+            help="Re-write unchanged events so Google sends invitation e-mails "
+            "(use with --send-updates all).",
+        ),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Show the plan only; never write."),
@@ -175,6 +183,7 @@ def migrate(
             attendees=attendees,
             domains=domains,
             send_updates=send_updates,
+            resend_invitations=resend_invitations,
             dry_run=dry_run,
         )
     except CalMoveError as error:
@@ -189,6 +198,7 @@ def _run_wizard(
     attendees: dict[str, str],
     domains: dict[str, str],
     send_updates: SendUpdates,
+    resend_invitations: bool,
     dry_run: bool,
 ) -> None:
     store = KeyringTokenStore()
@@ -230,6 +240,7 @@ def _run_wizard(
         source_address=source_address,
         forward_address=forward_address,
         mirror_rsvp=mirror_rsvp,
+        resend_invitations=resend_invitations,
     )
     console.print("[bold]Step 4: dry run[/bold]")
     plan = MigrateCalendarUseCase(
@@ -241,7 +252,9 @@ def _run_wizard(
         console.print("Dry run requested; nothing was written.")
         return
 
-    if plan.created == plan.updated == plan.deleted == plan.forwarded == 0:
+    if plan.created == plan.updated == plan.deleted == plan.forwarded == 0 and not (
+        resend_invitations and plan.skipped
+    ):
         if not plan.failed:
             console.print("Nothing to migrate.")
             return
@@ -268,6 +281,7 @@ def _run_wizard(
         source_address=source_address,
         forward_address=forward_address,
         mirror_rsvp=mirror_rsvp,
+        resend_invitations=resend_invitations,
     )
     result = MigrateCalendarUseCase(
         source, destination, ConsoleReporter(console), forwarder=source, responder=destination

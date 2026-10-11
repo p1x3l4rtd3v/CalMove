@@ -840,3 +840,40 @@ class TestGroupCalendarForwarding:
         )
         assert result.skipped == 1
         assert responder.responses == []
+
+
+class TestResendInvitations:
+    def test_resend_updates_in_sync_events_with_send_updates(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        event = make_event("evt-1")
+        result, writer, reporter = migrate(
+            [event],
+            migrated=synced(event),
+            send_updates="all",
+            resend_invitations=True,
+        )
+        assert result.updated == 1
+        assert result.skipped == 0
+        calendar_id, destination_id, updated, _fp, send = writer.updated[0]
+        assert (calendar_id, destination_id, send) == ("dst-cal", "dest-evt-1", "all")
+        assert updated.id == "evt-1"
+        assert [e.id for e in reporter.updated] == ["evt-1"]
+
+    def test_resend_dry_run_counts_as_updates_without_writes(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        event = make_event("evt-1")
+        result, writer, _ = migrate(
+            [event], migrated=synced(event), resend_invitations=True, dry_run=True
+        )
+        assert result.updated == 1
+        assert writer.updated == []
+
+    def test_without_resend_in_sync_events_stay_skipped(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        event = make_event("evt-1")
+        result, writer, _ = migrate([event], migrated=synced(event), send_updates="all")
+        assert result.skipped == 1
+        assert writer.updated == []

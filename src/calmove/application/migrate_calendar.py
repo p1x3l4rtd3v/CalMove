@@ -39,6 +39,7 @@ class MigrationRequest:
     source_address: str | None = None  # old account's primary e-mail (RSVP mirroring)
     forward_address: str | None = None  # destination calendar's address (forward target)
     mirror_rsvp: bool = True  # False when the destination is a group calendar (no RSVP)
+    resend_invitations: bool = False  # re-write in-sync owned events so Google re-invites
 
 
 @dataclass
@@ -128,7 +129,13 @@ class MigrateCalendarUseCase:
         mapped_exceptions = [self._map_addresses(e, request, result) for e in exceptions]
         fingerprint = event_fingerprint(mapped_event, mapped_exceptions)
 
-        if prior is not None and prior.fingerprint == fingerprint:
+        # Unchanged events are skipped, unless re-send mode deliberately re-writes them
+        # so Google delivers the invitations a previous silent run never sent.
+        if (
+            prior is not None
+            and prior.fingerprint == fingerprint
+            and not request.resend_invitations
+        ):
             result.skipped += 1
             self._reporter.event_skipped(event)
             for exception in exceptions:

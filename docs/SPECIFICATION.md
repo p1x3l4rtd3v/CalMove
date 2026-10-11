@@ -252,7 +252,13 @@ Key behaviors:
 - Order: masters before exceptions; failures on one event never abort the run (collected in
   the report).
 - Notifications: `sendUpdates=none` by default so hundreds of migrated meetings do not spam
-  every attendee with invitations; `--send-updates all` opts in.
+  every attendee with invitations. Opting in: CLI `--send-updates all`; the web wizard offers
+  a "send invitation e-mails" checkbox on the confirmation step. Because events migrated in
+  an earlier silent run are skipped as unchanged, the opt-in also enables **re-send mode**
+  (`resend_invitations`): owned events whose fingerprint matches are patched with identical
+  content and `sendUpdates=all`, which makes Google deliver the invitations without changing
+  any event data. Invited events are unaffected (the organizer's event already carries its
+  own guest notifications).
 - Rooms: resource attendees are carried over. Because room resource e-mail addresses differ
   between workspaces, an optional JSON room map (`--room-map rooms.json`,
   `{"old-room@resource.calendar.google.com": "new-room@..."}`) translates them; unmapped rooms are

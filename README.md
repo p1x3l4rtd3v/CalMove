@@ -62,6 +62,7 @@ The interactive wizard then:
 | `--map-domain old=new` | Rewrite attendee domains on owned events, e.g. `--map-domain old-company.com=new-company.com` (repeatable). Local parts stay; rooms and other domains untouched. |
 | `--attendee-map attendees.json` | Explicit old → new attendee e-mails for people whose local part changes (beats domain rules). |
 | `--send-updates [none\|all\|externalOnly]` | Invitation e-mails for created events. Default `none`: attendees receive no invitation e-mails. |
+| `--resend-invitations` | Re-write unchanged events so Google sends invitation e-mails for events migrated by an earlier silent run (combine with `--send-updates all`). |
 
 Room map example (`rooms.json`):
 

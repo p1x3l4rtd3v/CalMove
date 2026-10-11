@@ -341,7 +341,14 @@ def create_app(
                 return redirect(url_for("index"))
             session.status = "running"
         source, destination = _gateways(session)
-        run_request = _build_request(session, config, dry_run=False)
+        notify = request.form.get("notify") == "on"
+        run_request = _build_request(
+            session,
+            config,
+            dry_run=False,
+            send_updates="all" if notify else "none",
+            resend_invitations=notify,
+        )
         use_case = MigrateCalendarUseCase(
             source,
             destination,
@@ -439,7 +446,14 @@ def _gateways(session: WebSession) -> tuple[CalendarReader, CalendarWriter]:
     return session.source, session.destination
 
 
-def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> MigrationRequest:
+def _build_request(
+    session: WebSession,
+    config: WebConfig,
+    *,
+    dry_run: bool,
+    send_updates: str = "none",
+    resend_invitations: bool = False,
+) -> MigrationRequest:
     if (
         session.source_calendar is None
         or session.destination_calendar is None
@@ -451,7 +465,7 @@ def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> 
         destination_calendar_id=session.destination_calendar.id,
         date_range=session.date_range,
         dry_run=dry_run,
-        send_updates="none",
+        send_updates=send_updates,
         room_map=config.room_map,
         attendee_map=config.attendee_map,
         domain_map=config.domain_map,
@@ -460,6 +474,7 @@ def _build_request(session: WebSession, config: WebConfig, *, dry_run: bool) -> 
         # itself for a primary-calendar migration, the group calendar for a team one.
         forward_address=session.destination_calendar.id,
         mirror_rsvp=session.destination_calendar.primary,
+        resend_invitations=resend_invitations,
     )
 
 

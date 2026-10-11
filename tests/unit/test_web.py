@@ -62,13 +62,15 @@ class DestinationGateway:
     def __init__(self, calendars: Sequence[Calendar]) -> None:
         self.calendars = list(calendars)
         self.created: list[tuple[str, CalendarEvent, str]] = []
+        self.updated: list[tuple[str, str, CalendarEvent, str]] = []
         self.responses: list[tuple[str, str, str]] = []
+        self.migrated: dict[str, MigratedEvent] = {}
 
     def list_calendars(self) -> list[Calendar]:
         return list(self.calendars)
 
     def migrated_events(self, calendar_id: str, date_range: DateRange) -> dict[str, MigratedEvent]:
-        return {}
+        return dict(self.migrated)
 
     def create_event(
         self, calendar_id: str, event: CalendarEvent, *, fingerprint: str, send_updates: str
@@ -85,7 +87,7 @@ class DestinationGateway:
         fingerprint: str,
         send_updates: str,
     ) -> None:
-        raise AssertionError("no updates in these fixtures")
+        self.updated.append((calendar_id, destination_id, event, send_updates))
 
     def delete_event(self, calendar_id: str, destination_id: str, *, send_updates: str) -> None:
         raise AssertionError("no deletes in these fixtures")
@@ -526,3 +528,45 @@ class TestRangePageScript:
         csp = page.headers["Content-Security-Policy"]
         assert "script-src 'self'" in csp
         assert "default-src 'none'" in csp
+
+
+class TestNotifyAttendees:
+    def test_default_run_sends_no_updates(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        csrf = _advance_to_plan(client, harness)
+        session = harness.session_for(client)
+        client.post("/migrate", data={"confirm": "migrate", "csrf": csrf})
+        _wait_for_completion(session)
+        assert all(send == "none" for _, _, send in harness.destination.created)
+
+    def test_notify_checkbox_sends_updates_and_resends_in_sync_events(self) -> None:
+        from calmove.application.ports import MigratedEvent as ME
+        from calmove.domain.fingerprint import event_fingerprint
+
+        harness = _harness()
+        # evt-1 was migrated by an earlier silent run and is unchanged.
+        synced_event = _event("evt-1")
+        harness.destination.migrated = {
+            "evt-1": ME(destination_id="dest-evt-1", fingerprint=event_fingerprint(synced_event))
+        }
+        client = harness.client()
+        csrf = _advance_to_plan(client, harness)
+        session = harness.session_for(client)
+        client.post("/migrate", data={"confirm": "migrate", "csrf": csrf, "notify": "on"})
+        _wait_for_completion(session)
+
+        assert session.status == "done"
+        # evt-2 is new: created with e-mail notifications.
+        assert [(e.id, send) for _, e, send in harness.destination.created] == [("evt-2", "all")]
+        # evt-1 was in sync: re-written so Google delivers the invitations.
+        assert [(dest, send) for _, dest, _, send in harness.destination.updated] == [
+            ("dest-evt-1", "all")
+        ]
+
+    def test_plan_page_offers_notify_checkbox(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        _advance_to_plan(client, harness)
+        page = client.get("/plan")
+        assert b'name="notify"' in page.data

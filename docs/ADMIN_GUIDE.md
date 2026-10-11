@@ -174,7 +174,10 @@ clear "at capacity" page).
 2. Sign in with the old account → pick the source calendar.
 3. Sign in with the new account → pick the destination calendar.
 4. Choose a date range → review the dry-run plan (nothing written yet).
-5. Type `migrate` → watch progress → **Finish** (erases the session).
+5. Type `migrate` → watch progress → **Finish** (erases the session). The checkbox above
+   the confirmation field sends invitation e-mails to attendees; it also re-sends for
+   events migrated by an earlier run without notifications. Leave it unchecked for silent
+   trial runs.
 
 Re-running later is safe and encouraged: only changed, new, or deleted events are touched.
 Events they were merely invited to are not copied; the invitation is forwarded to the
