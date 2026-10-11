@@ -504,3 +504,25 @@ class TestGroupCalendarDestination:
         assert harness.source.forwarded == [("src-cal", "inv-1", "dst-cal", "none")]
         # …and no RSVP was mirrored (calendars don't RSVP).
         assert harness.destination.responses == []
+
+
+class TestRangePageScript:
+    def test_range_page_includes_script_and_static_serves_it(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        client.post("/start")
+        _login(client, harness, "source", "c1")
+        csrf = harness.session_for(client).csrf_token
+        client.post("/calendars/source", data={"calendar_id": "src-cal", "csrf": csrf})
+        _login(client, harness, "destination", "c2")
+        client.post("/calendars/destination", data={"calendar_id": "dst-cal", "csrf": csrf})
+        page = client.get("/range")
+        assert b'src="/static/range.js"' in page.data
+        assert b'id="preset-custom"' in page.data
+        script = client.get("/static/range.js")
+        assert script.status_code == 200
+        assert b"preset-custom" in script.data
+        # CSP allows self-hosted scripts and nothing else.
+        csp = page.headers["Content-Security-Policy"]
+        assert "script-src 'self'" in csp
+        assert "default-src 'none'" in csp

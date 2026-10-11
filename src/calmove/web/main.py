@@ -170,8 +170,9 @@ def create_app(
     @app.after_request
     def security_headers(response: Response) -> Response:
         response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' "
-            "https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'"
+            "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
+            "form-action 'self' https://accounts.google.com; base-uri 'none'; "
+            "frame-ancestors 'none'"
         )
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
