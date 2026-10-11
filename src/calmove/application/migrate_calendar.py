@@ -278,11 +278,11 @@ class MigrateCalendarUseCase:
         interop) the copy can never materialize, and a mirror attempt would just
         produce a 404 for an event that gets a placeholder anyway.
         """
-        if not self._forward(request, result, event):
+        prior = existing.get(event.id)
+        if not self._forward(request, result, event, prior):
             return
         if request.dry_run:
             return
-        prior = existing.get(event.id)
         if prior is not None and prior.placeholder and not prior.trusted:
             result.failed.append((event.id, _UNTRUSTED_MARKER))
             self._reporter.event_failed(event, MigrationError(_UNTRUSTED_MARKER))
@@ -298,9 +298,20 @@ class MigrateCalendarUseCase:
         self._ensure_visible(request, result, existing, event, visible=visible)
 
     def _forward(
-        self, request: MigrationRequest, result: MigrationResult, event: CalendarEvent
+        self,
+        request: MigrationRequest,
+        result: MigrationResult,
+        event: CalendarEvent,
+        prior: MigratedEvent | None,
     ) -> bool:
-        """Ensure the forward address is on the guest list; True when it is (or will be)."""
+        """Ensure the forward address is on the guest list; True when it is (or will be).
+
+        Google drops locally added guests from copies of externally organized
+        events (the organizer's system is authoritative), so membership alone
+        cannot prove a forward already happened. A trusted placeholder is that
+        proof: it only exists because an earlier forward did not deliver, so the
+        event is skipped instead of being forwarded on every run.
+        """
         forward_address = request.forward_address
         if forward_address is None:
             result.failed.append((event.id, "no destination account address for forwarding"))
@@ -308,7 +319,8 @@ class MigrateCalendarUseCase:
         guest = next(
             (a for a in event.attendees if a.email.lower() == forward_address.lower()), None
         )
-        if guest is not None:
+        already_placeholdered = prior is not None and prior.placeholder and prior.trusted
+        if guest is not None or already_placeholdered:
             result.skipped += 1
             self._reporter.event_skipped(event)
             return True

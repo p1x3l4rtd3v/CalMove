@@ -1078,3 +1078,77 @@ class TestMirrorVisibilityGate:
         )
         assert responder.responses == [("inv-1", "me@new.example", "accepted")]
         assert result.failed == []
+
+
+class TestNoRepeatForwarding:
+    """A placeholder proves the forward already happened; re-runs must not forward again."""
+
+    @staticmethod
+    def _invited_m365(make_event: Any) -> Any:
+        # Google drops the locally added guest from externally organized copies,
+        # so the new address is absent again on the next fetch.
+        return make_event(
+            "inv-1",
+            is_organizer=False,
+            attendees=(
+                Attendee(email="organizer@umb.example"),
+                Attendee(email="me@old.example", response_status="accepted"),
+            ),
+        )
+
+    @staticmethod
+    def _placeholder_entry(make_event: Any) -> Any:
+        from dataclasses import replace
+
+        from calmove.application.migrate_calendar import _PLACEHOLDER_NOTE
+
+        invited = TestNoRepeatForwarding._invited_m365(make_event)
+        stripped = replace(
+            invited,
+            attendees=(),
+            conference_link=None,
+            description=invited.description + _PLACEHOLDER_NOTE,
+        )
+        return synced(stripped, placeholder=True, destination_id="dest-ph")
+
+    def test_rerun_with_placeholder_skips_instead_of_forwarding(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        forwarder = FakeForwarder()
+        result, writer, reporter = migrate(
+            [self._invited_m365(make_event)],
+            migrated=self._placeholder_entry(make_event),
+            invisible_ids={"inv-1"},
+            forwarder=forwarder,
+            forward_address="me@new.example",
+        )
+        assert forwarder.forwarded == []  # no repeat forward
+        assert result.forwarded == 0
+        assert result.skipped == 1
+        assert result.failed == []
+        assert writer.created == writer.updated == []  # placeholder untouched
+        assert [e.id for e in reporter.skipped] == ["inv-1"]
+
+    def test_dry_run_plan_counts_placeholdered_events_as_skips(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        result, _, _ = migrate(
+            [self._invited_m365(make_event)],
+            migrated=self._placeholder_entry(make_event),
+            forward_address="me@new.example",
+            dry_run=True,
+        )
+        assert result.forwarded == 0
+        assert result.skipped == 1
+
+    def test_first_contact_still_forwards(self, migrate: Any, make_event: Any) -> None:
+        forwarder = FakeForwarder()
+        result, _, _ = migrate(
+            [self._invited_m365(make_event)],
+            invisible_ids={"inv-1"},
+            forwarder=forwarder,
+            forward_address="me@new.example",
+        )
+        assert result.forwarded == 1
+        assert len(forwarder.forwarded) == 1
+        assert result.placeholder_events == ["inv-1"]
