@@ -321,12 +321,19 @@ class TestWizardFlow:
         assert b"needs &#39;writer&#39; or &#39;owner&#39;" in response.data
         assert harness.session_for(client).destination_calendar is None
 
-    def test_wrong_confirmation_word_writes_nothing(self) -> None:
+    def test_wrong_confirmation_word_rerenders_plan_with_state(self) -> None:
         harness = _harness()
         client = harness.client()
         csrf = _advance_to_plan(client, harness)
-        response = client.post("/migrate", data={"confirm": "yes please", "csrf": csrf})
+        response = client.post(
+            "/migrate",
+            data={"confirm": "yes please", "csrf": csrf, "notify": "on", "resend": "on"},
+        )
         assert response.status_code == 400
+        # The user stays on the plan: table, inline message, and preserved checkboxes.
+        assert b"Would create" in response.data
+        assert b"Type the word migrate" in response.data
+        assert response.data.count(b"checked") == 2
         assert harness.destination.created == []
         assert harness.session_for(client).status == "setup"
 

@@ -330,28 +330,44 @@ def create_app(
             return redirect(url_for("index"))
         return render_template("plan.html", plan=session.plan, csrf=session.csrf_token)
 
+    def rerender_plan(
+        session: WebSession, message: str, *, notify: bool, resend: bool
+    ) -> ResponseReturnValue:
+        """Validation failures keep the user on the plan with state preserved."""
+        return (
+            render_template(
+                "plan.html",
+                plan=session.plan,
+                csrf=session.csrf_token,
+                message=message,
+                notify_checked=notify,
+                resend_checked=resend,
+            ),
+            400,
+        )
+
     @app.post("/migrate")
     def migrate() -> ResponseReturnValue:
         session = require_session()
         check_csrf(session)
-        if request.form.get("confirm", "").strip() != "migrate":
-            return fail("Confirmation word did not match; nothing was written.", 400)
         notify = request.form.get("notify") == "on"
         resend = request.form.get("resend") == "on"
+        if request.form.get("confirm", "").strip() != "migrate":
+            return rerender_plan(
+                session,
+                "Type the word migrate into the confirmation field to start; nothing was written.",
+                notify=notify,
+                resend=resend,
+            )
         if resend and not notify:
             # A silent identical rewrite accomplishes nothing; the plan.js dependency
             # prevents this in the browser, the server enforces it for everyone else.
-            return (
-                render_template(
-                    "plan.html",
-                    plan=session.plan,
-                    csrf=session.csrf_token,
-                    message=(
-                        "Re-sending invitations requires the invitation e-mail option; "
-                        "tick both checkboxes."
-                    ),
-                ),
-                400,
+            return rerender_plan(
+                session,
+                "Re-sending invitations requires the invitation e-mail option; "
+                "tick both checkboxes.",
+                notify=notify,
+                resend=resend,
             )
         with session.lock:  # atomic check-and-transition: a double submit must not double-run
             if session.plan is None or session.status != "setup":
