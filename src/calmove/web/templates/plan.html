@@ -1,6 +1,8 @@
 {% extends "base.html" %}
+{% block head %}<script src="{{ url_for('static', filename='plan.js') }}" defer></script>{% endblock %}
 {% block body %}
 <h2>Migration plan (dry run, nothing has been written)</h2>
+{% if message %}<p class="error">{{ message }}</p>{% endif %}
 <table>
   <tr><th>Would create</th><td>{{ plan.created }}</td></tr>
   <tr><th>Would update (changed at source)</th><td>{{ plan.updated }}</td></tr>
@@ -21,14 +23,16 @@
 {% if plan.failed %}
 <p class="error">Everything else is in sync, but {{ plan.failed | length }} items need attention.</p>
 {% else %}
-<p>Everything is already in sync. Run again with the checkbox below to send invitation
-   e-mails for events that were migrated silently.</p>
+<p>Everything is already in sync. To send invitation e-mails for events that were migrated
+   silently, tick both checkboxes below and run again.</p>
 {% endif %}
 {% endif %}
 <form method="post" action="{{ url_for('migrate') }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
-  <label><input type="checkbox" name="notify">
-    Send invitation e-mails to attendees (also re-sends for already migrated events)</label>
+  <label><input type="checkbox" name="notify" id="notify-box">
+    Send invitation e-mails to attendees for events written in this run</label>
+  <label><input type="checkbox" name="resend" id="resend-box">
+    Also re-send invitations for unchanged, already migrated events</label>
   <label>Type <strong>migrate</strong> to start the migration:
     <input type="text" name="confirm" autocomplete="off"></label>
   <button type="submit">Migrate</button>

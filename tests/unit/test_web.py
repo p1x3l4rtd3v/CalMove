@@ -540,12 +540,11 @@ class TestNotifyAttendees:
         _wait_for_completion(session)
         assert all(send == "none" for _, _, send in harness.destination.created)
 
-    def test_notify_checkbox_sends_updates_and_resends_in_sync_events(self) -> None:
+    def test_notify_alone_does_not_touch_in_sync_events(self) -> None:
         from calmove.application.ports import MigratedEvent as ME
         from calmove.domain.fingerprint import event_fingerprint
 
         harness = _harness()
-        # evt-1 was migrated by an earlier silent run and is unchanged.
         synced_event = _event("evt-1")
         harness.destination.migrated = {
             "evt-1": ME(destination_id="dest-evt-1", fingerprint=event_fingerprint(synced_event))
@@ -559,14 +558,50 @@ class TestNotifyAttendees:
         assert session.status == "done"
         # evt-2 is new: created with e-mail notifications.
         assert [(e.id, send) for _, e, send in harness.destination.created] == [("evt-2", "all")]
-        # evt-1 was in sync: re-written so Google delivers the invitations.
+        # evt-1 stays untouched without the re-send checkbox.
+        assert harness.destination.updated == []
+
+    def test_both_checkboxes_resend_for_in_sync_events(self) -> None:
+        from calmove.application.ports import MigratedEvent as ME
+        from calmove.domain.fingerprint import event_fingerprint
+
+        harness = _harness()
+        synced_event = _event("evt-1")
+        harness.destination.migrated = {
+            "evt-1": ME(destination_id="dest-evt-1", fingerprint=event_fingerprint(synced_event))
+        }
+        client = harness.client()
+        csrf = _advance_to_plan(client, harness)
+        session = harness.session_for(client)
+        client.post(
+            "/migrate",
+            data={"confirm": "migrate", "csrf": csrf, "notify": "on", "resend": "on"},
+        )
+        _wait_for_completion(session)
+
+        assert session.status == "done"
         assert [(dest, send) for _, dest, _, send in harness.destination.updated] == [
             ("dest-evt-1", "all")
         ]
 
-    def test_plan_page_offers_notify_checkbox(self) -> None:
+    def test_resend_without_notify_is_rejected(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        csrf = _advance_to_plan(client, harness)
+        response = client.post(
+            "/migrate", data={"confirm": "migrate", "csrf": csrf, "resend": "on"}
+        )
+        assert response.status_code == 400
+        assert b"tick both checkboxes" in response.data
+        assert harness.session_for(client).status == "setup"  # nothing started
+        assert harness.destination.created == []
+
+    def test_plan_page_offers_both_checkboxes_and_script(self) -> None:
         harness = _harness()
         client = harness.client()
         _advance_to_plan(client, harness)
         page = client.get("/plan")
         assert b'name="notify"' in page.data
+        assert b'name="resend"' in page.data
+        assert b'src="/static/plan.js"' in page.data
+        assert client.get("/static/plan.js").status_code == 200

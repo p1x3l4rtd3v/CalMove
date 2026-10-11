@@ -176,6 +176,13 @@ def migrate(
         console.print(f"[red]{_safe(str(error))}[/red]")
         raise typer.Exit(code=1) from error
 
+    if resend_invitations and send_updates is SendUpdates.none:
+        console.print(
+            "[red]--resend-invitations needs --send-updates all (or externalOnly); "
+            "a silent identical rewrite accomplishes nothing.[/red]"
+        )
+        raise typer.Exit(code=2)
+
     try:
         _run_wizard(
             client_secret,

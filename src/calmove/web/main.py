@@ -336,18 +336,34 @@ def create_app(
         check_csrf(session)
         if request.form.get("confirm", "").strip() != "migrate":
             return fail("Confirmation word did not match; nothing was written.", 400)
+        notify = request.form.get("notify") == "on"
+        resend = request.form.get("resend") == "on"
+        if resend and not notify:
+            # A silent identical rewrite accomplishes nothing; the plan.js dependency
+            # prevents this in the browser, the server enforces it for everyone else.
+            return (
+                render_template(
+                    "plan.html",
+                    plan=session.plan,
+                    csrf=session.csrf_token,
+                    message=(
+                        "Re-sending invitations requires the invitation e-mail option; "
+                        "tick both checkboxes."
+                    ),
+                ),
+                400,
+            )
         with session.lock:  # atomic check-and-transition: a double submit must not double-run
             if session.plan is None or session.status != "setup":
                 return redirect(url_for("index"))
             session.status = "running"
         source, destination = _gateways(session)
-        notify = request.form.get("notify") == "on"
         run_request = _build_request(
             session,
             config,
             dry_run=False,
             send_updates="all" if notify else "none",
-            resend_invitations=notify,
+            resend_invitations=resend,
         )
         use_case = MigrateCalendarUseCase(
             source,
