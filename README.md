@@ -8,7 +8,8 @@ source workspace and re-creates them through the same API in the destination wor
 attendees, rooms, RRULEs, exceptions, and event settings survive.
 
 Details: [docs/SPECIFICATION.md](docs/SPECIFICATION.md) ·
-architectural rules: [CONSTITUTION.md](CONSTITUTION.md)
+architectural rules: [CONSTITUTION.md](CONSTITUTION.md) ·
+deployment: [docs/ADMIN_GUIDE.md](docs/ADMIN_GUIDE.md)
 
 ## Prerequisites
 
