@@ -37,7 +37,10 @@
     Also re-send invitations for unchanged, already migrated events</label>
   <label>Type <strong>migrate</strong> to start the migration:
     <input type="text" name="confirm" id="confirm-word" autocomplete="off"></label>
-  <button type="submit" id="migrate-button">Migrate</button>
+  <button type="submit" id="migrate-button" disabled hidden>Migrate</button>
+  <noscript><button type="submit">Migrate</button>
+    <p class="muted">The migration starts only when the field contains the word migrate;
+    the server checks it.</p></noscript>
 </form>
 {% else %}
 {% if plan.failed %}

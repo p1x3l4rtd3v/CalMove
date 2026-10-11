@@ -622,3 +622,15 @@ class TestNotifyAttendees:
         assert b'name="resend"' in page.data
         assert b'src="/static/plan.js"' in page.data
         assert client.get("/static/plan.js").status_code == 200
+
+
+class TestMigrateButtonGate:
+    def test_button_ships_disabled_and_static_is_uncached(self) -> None:
+        harness = _harness()
+        client = harness.client()
+        _advance_to_plan(client, harness)
+        page = client.get("/plan")
+        assert b'id="migrate-button" disabled hidden' in page.data
+        assert b"<noscript><button" in page.data  # no-JS fallback stays usable
+        script = client.get("/static/plan.js")
+        assert script.headers["Cache-Control"] == "no-store"

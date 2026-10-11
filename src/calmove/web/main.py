@@ -177,6 +177,9 @@ def create_app(
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        # Tiny first-party scripts: never let a stale cached copy change form behavior.
+        if request.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/")

@@ -22,7 +22,9 @@ document.addEventListener("DOMContentLoaded", function () {
   var confirmField = document.getElementById("confirm-word");
   var migrateButton = document.getElementById("migrate-button");
   if (confirmField !== null && migrateButton !== null) {
-    // The button unlocks only once the confirmation word is typed.
+    // The hidden attribute keeps the JS-managed button out of no-JS sessions
+    // (where the noscript button takes over); reveal it and gate it on the word.
+    migrateButton.hidden = false;
     var sync = function () {
       migrateButton.disabled = confirmField.value.trim() !== "migrate";
     };
