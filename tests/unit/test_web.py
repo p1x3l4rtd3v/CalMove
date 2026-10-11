@@ -38,9 +38,10 @@ class SourceGateway:
 
     def __init__(self, events: Sequence[CalendarEvent]) -> None:
         self.events = list(events)
+        self.calendars: list[Calendar] = [SOURCE_CAL]
 
     def list_calendars(self) -> list[Calendar]:
-        return [SOURCE_CAL]
+        return list(self.calendars)
 
     def fetch_events(self, calendar_id: str, date_range: DateRange) -> list[CalendarEvent]:
         return list(self.events)
@@ -408,3 +409,17 @@ class TestSecurityBoundaries:
         assert response.status_code == 400
         assert b"evil-text" not in response.data
         assert b"Google reported an error." in response.data
+
+
+class TestUnicodeRendering:
+    def test_vietnamese_calendar_and_plan_render_utf8(self) -> None:
+        vn_cal = Calendar(id="src-cal", summary="Lịch công việc — Hà Nội", access_role="owner")
+        harness = Harness([_event("evt-1")], [DEST_WRITABLE])
+        harness.source.calendars = [vn_cal]
+        client = harness.client()
+        client.post("/start")
+        _login(client, harness, "source", "c1")
+        page = client.get("/calendars/source")
+        assert page.status_code == 200
+        assert "text/html; charset=utf-8" in page.headers["Content-Type"]
+        assert "Lịch công việc — Hà Nội".encode() in page.data

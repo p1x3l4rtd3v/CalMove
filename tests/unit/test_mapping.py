@@ -229,3 +229,46 @@ class TestEventToApi:
         source = {**TIMED_PAYLOAD, "hangoutLink": "https://meet.google.com/old-link"}
         payload = event_to_api(event_from_api(source))
         assert "createRequest" not in payload.get("conferenceData", {})
+
+
+class TestUnicodeFidelity:
+    """Titles/descriptions in any script must survive the dict ⇄ domain round trip byte-exact."""
+
+    SAMPLES: ClassVar[list[tuple[str, str, str]]] = [
+        ("Họp giao ban tuần", "Thảo luận kế hoạch quý 4 — phòng họp tầng 3", "Tầng 3, toà nhà A"),
+        ("週次定例ミーティング", "議題は第4四半期の計画", "東京オフィス 3F"),
+        ("Встреча команды", "Повестка: планирование", "Москва, офис"),
+        ("اجتماع الفريق", "جدول الأعمال: التخطيط", "مكتب دبي"),
+        ("Sprint-Review 🚀", "Ergebnisse & Ausblick 📊 — bitte pünktlich!", "Zürich, Büro 1"),
+    ]
+
+    def test_round_trip_preserves_all_scripts(self) -> None:
+        for summary, description, location in self.SAMPLES:
+            source = {
+                **TIMED_PAYLOAD,
+                "summary": summary,
+                "description": description,
+                "location": location,
+                "attendees": [{"email": "a@old.example", "displayName": "Nguyễn Văn Anh"}],
+            }
+            event = event_from_api(source)
+            assert (event.summary, event.description, event.location) == (
+                summary,
+                description,
+                location,
+            )
+            assert event.attendees[0].display_name == "Nguyễn Văn Anh"
+            payload = event_to_api(event, source_id=event.id)
+            assert payload["summary"] == summary
+            assert payload["description"] == description
+            assert payload["location"] == location
+
+    def test_meet_note_appends_cleanly_to_unicode_description(self) -> None:
+        source = {
+            **TIMED_PAYLOAD,
+            "description": "Chuẩn bị báo cáo 📈",
+            "hangoutLink": "https://meet.google.com/old-link",
+        }
+        payload = event_to_api(event_from_api(source), request_meet=True)
+        assert payload["description"].startswith("Chuẩn bị báo cáo 📈")
+        assert "https://meet.google.com/old-link" in payload["description"]

@@ -501,3 +501,45 @@ class TestForwarding:
         assert result.failed == []  # the organizer's event carries its own exceptions
         assert writer.applied == []
         assert result.forwarded == 1
+
+
+class TestUnicodeContent:
+    """Sync decisions must be exact for non-ASCII titles/descriptions (Vietnamese etc.)."""
+
+    def test_unicode_event_created_byte_exact(self, migrate: Any, make_event: Any) -> None:
+        event = make_event(
+            "evt-vn",
+            summary="Họp giao ban tuần 🚀",
+            description="Thảo luận kế hoạch quý 4 — tầng 3",
+            location="Toà nhà A, Hà Nội",
+        )
+        result, writer, _ = migrate([event])
+        assert result.created == 1
+        created = writer.created[0][1]
+        assert created.summary == "Họp giao ban tuần 🚀"
+        assert created.description == "Thảo luận kế hoạch quý 4 — tầng 3"
+        assert created.location == "Toà nhà A, Hà Nội"
+
+    def test_unchanged_unicode_event_is_skipped_on_rerun(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        event = make_event("evt-vn", summary="Họp giao ban tuần", description="Kế hoạch quý 4")
+        result, writer, _ = migrate([event], migrated=synced(event))
+        assert result.skipped == 1
+        assert writer.created == writer.updated == []
+
+    def test_diacritic_only_change_triggers_update(self, migrate: Any, make_event: Any) -> None:
+        # "Hop giao ban" → "Họp giao ban": differs only in combining marks.
+        before = make_event("evt-vn", summary="Hop giao ban")
+        after = make_event("evt-vn", summary="Họp giao ban")
+        result, writer, _ = migrate([after], migrated=synced(before))
+        assert result.updated == 1
+        assert writer.updated[0][2].summary == "Họp giao ban"
+
+    def test_fingerprint_is_deterministic_for_unicode(self, make_event: Any) -> None:
+        a = make_event("evt-vn", summary="週次定例 🚀", description="議題は計画")
+        b = make_event("evt-vn", summary="週次定例 🚀", description="議題は計画")
+        assert event_fingerprint(a) == event_fingerprint(b)
+        assert event_fingerprint(a) != event_fingerprint(
+            make_event("evt-vn", summary="週次定例 🚀", description="議題は計画変更")
+        )
