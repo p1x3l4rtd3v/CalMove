@@ -3,6 +3,7 @@
 import uuid
 from datetime import date, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from calmove.domain.model import Attendee, Calendar, CalendarEvent, EventTime, Reminder
 
@@ -10,6 +11,10 @@ SOURCE_ID_KEY = "calmove-source-id"
 FINGERPRINT_KEY = "calmove-fingerprint"
 PLACEHOLDER_KEY = "calmove-placeholder"
 _MIGRATION_NOTE = "\n\n[Migrated by CalMove - original meeting link: {link}]"
+_CONFERENCE_NOTE = "\n\n[Meeting link: {link}]"
+# Only Google Meet links are bound to the old Workspace; third-party conference
+# links (Teams, Zoom, Webex, ...) keep working after the migration.
+_GOOGLE_MEET_HOSTS = ("meet.google.com", "hangouts.google.com", "plus.google.com")
 
 
 def calendar_from_api(payload: dict[str, Any]) -> Calendar:
@@ -51,6 +56,12 @@ def _conference_link_from_api(payload: dict[str, Any]) -> str | None:
         if uri:
             return str(uri)
     return None
+
+
+def is_google_meet_link(link: str) -> bool:
+    """Whether ``link`` points at Google Meet (workspace-bound, dies at cutover)."""
+    host = urlsplit(link).hostname or ""
+    return host.lower() in _GOOGLE_MEET_HOSTS
 
 
 def event_from_api(payload: dict[str, Any]) -> CalendarEvent:
@@ -148,14 +159,20 @@ def event_to_api(
         private[PLACEHOLDER_KEY] = "true"
     if private:
         payload["extendedProperties"] = {"private": private}
-    if request_meet and event.conference_link is not None:
-        payload["conferenceData"] = {
-            "createRequest": {
-                "requestId": str(uuid.uuid4()),
-                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+    link = event.conference_link
+    if link is not None and is_google_meet_link(link):
+        if request_meet:
+            payload["conferenceData"] = {
+                "createRequest": {
+                    "requestId": str(uuid.uuid4()),
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
             }
-        }
-    if annotate_original_link and event.conference_link is not None:
-        description = description + _MIGRATION_NOTE.format(link=event.conference_link)
+        if annotate_original_link:
+            description = description + _MIGRATION_NOTE.format(link=link)
+    elif link is not None and annotate_original_link and link not in description:
+        # Third-party conference (Teams, Zoom, ...): the link survives the migration,
+        # so it is carried over instead of being replaced by a fresh Meet.
+        description = description + _CONFERENCE_NOTE.format(link=link)
     payload["description"] = description
     return payload

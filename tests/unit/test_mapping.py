@@ -294,3 +294,47 @@ class TestUnicodeFidelity:
         payload = event_to_api(event_from_api(source), annotate_original_link=True)
         assert payload["description"].startswith("Chuẩn bị báo cáo 📈")
         assert "https://meet.google.com/old-link" in payload["description"]
+
+
+class TestThirdPartyConferences:
+    """Teams/Zoom/Webex links survive the migration; only Meet is replaced."""
+
+    def test_zoom_link_is_preserved_without_meet_request(self) -> None:
+        source = {
+            **TIMED_PAYLOAD,
+            "conferenceData": {"entryPoints": [{"uri": "https://acme.zoom.us/j/123456?pwd=abc"}]},
+        }
+        payload = event_to_api(
+            event_from_api(source), request_meet=True, annotate_original_link=True
+        )
+        assert "conferenceData" not in payload  # no fresh Meet for a Zoom meeting
+        assert "[Meeting link: https://acme.zoom.us/j/123456?pwd=abc]" in payload["description"]
+        assert "Migrated by CalMove" not in payload["description"]
+
+    def test_teams_link_already_in_description_is_not_duplicated(self) -> None:
+        teams = "https://teams.microsoft.com/l/meetup-join/xyz"
+        source = {
+            **TIMED_PAYLOAD,
+            "description": f"Join here: {teams}",
+            "conferenceData": {"entryPoints": [{"uri": teams}]},
+        }
+        payload = event_to_api(
+            event_from_api(source), request_meet=True, annotate_original_link=True
+        )
+        assert payload["description"].count(teams) == 1
+        assert "conferenceData" not in payload
+
+    def test_meet_link_still_gets_fresh_conference_and_note(self) -> None:
+        source = {**TIMED_PAYLOAD, "hangoutLink": "https://meet.google.com/abc-defg-hij"}
+        payload = event_to_api(
+            event_from_api(source), request_meet=True, annotate_original_link=True
+        )
+        assert "createRequest" in payload["conferenceData"]
+        assert "Migrated by CalMove" in payload["description"]
+
+    def test_meet_detection_is_host_based_not_substring(self) -> None:
+        from calmove.infrastructure.google.mapping import is_google_meet_link
+
+        assert is_google_meet_link("https://meet.google.com/abc")
+        assert not is_google_meet_link("https://meet.google.com.evil.example/abc")
+        assert not is_google_meet_link("https://zoom.us/j/1?next=meet.google.com")

@@ -275,6 +275,12 @@ Key behaviors:
   (`originalStartTime`) of the newly created master.
 - Order: masters before exceptions; failures on one event never abort the run (collected in
   the report).
+- Conference links: only Google Meet links are workspace-bound. Events with a Meet link
+  get a fresh Meet conference on the new event, with the old link kept as a description
+  note for reference. Events with a third-party conference (Microsoft Teams, Zoom, Webex,
+  and similar) keep their original link: it works independently of the Workspace, so no
+  Meet is requested and the link is added to the description when it does not already
+  appear there.
 - Notifications: `sendUpdates=none` by default so hundreds of migrated meetings do not spam
   every attendee with invitations. Opting in is two separate choices:
   - **Notify** (CLI `--send-updates all`; web checkbox "send invitation e-mails"): events

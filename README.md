@@ -128,7 +128,7 @@ Run it locally without Docker via `uv run calmove-web`.
 
 | Item | Behavior |
 |---|---|
-| Google Meet links | Cannot be transferred across workspaces. CalMove requests a fresh Meet conference on the new event and appends the old link to the description for reference. |
+| Google Meet links | Meet links are bound to the old Workspace and cannot be transferred. CalMove requests a fresh Meet conference on the new event and keeps the old link in the description for reference. Third-party conference links (Teams, Zoom, Webex, and similar) keep working and are carried over unchanged. |
 | Organizer | The migrating user becomes organizer of re-created events they owned. Invited events are forwarded, not copied, so the original organizer stays in charge. Forwarding needs the organizer's "guests can invite others" setting (Google default: on). |
 | External organizers (Microsoft 365, Exchange) | Forwarding cannot reach non-Google organizers; such events are copied as read-only placeholders (no attendees, rooms, or Meet) until the organizer invites the new address, which replaces the placeholder automatically on the next run. |
 | Attendee RSVP status | Sent best-effort; Google may reset it to `needsAction`. |
