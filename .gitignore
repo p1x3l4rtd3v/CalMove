@@ -19,6 +19,12 @@ client_secret*.json
 token*.json
 rooms*.json
 
+# Mapping workspace: real org data stays local; only docs and neutral examples
+# are tracked (see mapping-templates/README.md)
+mapping-templates/*
+!mapping-templates/README.md
+!mapping-templates/*.example.json
+
 # OS / editor
 .DS_Store
 .idea/
