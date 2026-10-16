@@ -111,7 +111,9 @@ class MigrateCalendarUseCase:
         for event in invited:
             self._handle_invited(request, result, existing, event)
         self._delete_vanished(request, result, existing, owned_ids, invited_ids)
-        self._fail_orphans(result, exceptions_by_master, owned_ids | invited_ids)
+        self._resolve_orphans(
+            request, result, existing, exceptions_by_master, owned_ids | invited_ids
+        )
         return result
 
     def _sync_owned(
@@ -246,23 +248,38 @@ class MigrateCalendarUseCase:
                 result.deleted += 1
                 self._reporter.event_deleted(source_id)
 
-    def _fail_orphans(
+    def _resolve_orphans(
         self,
+        request: MigrationRequest,
         result: MigrationResult,
+        existing: Mapping[str, MigratedEvent],
         exceptions_by_master: Mapping[str, list[CalendarEvent]],
         known_master_ids: set[str],
     ) -> None:
-        """Fail exceptions whose master was neither owned nor invited.
+        """Handle exceptions whose master was not part of this run's fetch.
 
         Owned masters are handled in the sync loop; invited masters carry their own
-        exceptions on the organizer's event, so forwarding the master covers them.
+        exceptions on the organizer's event. A master migrated by an earlier run
+        (typically with a wider date range) is found via the destination marker map
+        and the exception is applied onto it. Only a master that is nowhere to be
+        found fails with "master not migrated".
         """
         for master_id, orphans in exceptions_by_master.items():
             if master_id in known_master_ids:
                 continue
-            for exception in orphans:
-                result.failed.append((exception.id, _MASTER_NOT_MIGRATED))
-                self._reporter.event_failed(exception, MigrationError(_MASTER_NOT_MIGRATED))
+            prior = existing.get(master_id)
+            if prior is None or not prior.trusted or prior.placeholder:
+                for exception in orphans:
+                    result.failed.append((exception.id, _MASTER_NOT_MIGRATED))
+                    self._reporter.event_failed(exception, MigrationError(_MASTER_NOT_MIGRATED))
+                continue
+            if request.dry_run:
+                result.updated += len(orphans)
+                continue
+            mapped = [self._map_addresses(e, request, result) for e in orphans]
+            result.updated += self._apply_exceptions(
+                request, result, prior.destination_id, orphans, mapped
+            )
 
     def _handle_invited(
         self,

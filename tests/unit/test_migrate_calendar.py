@@ -1152,3 +1152,59 @@ class TestNoRepeatForwarding:
         assert result.forwarded == 1
         assert len(forwarder.forwarded) == 1
         assert result.placeholder_events == ["inv-1"]
+
+
+class TestOrphanResolution:
+    """Exceptions whose master lives outside the window apply via the marker map."""
+
+    def test_orphan_applies_onto_previously_migrated_master(
+        self, migrate: Any, make_event: Any
+    ) -> None:
+        master = _master(make_event)  # migrated by an earlier wide-range run...
+        exc = _exception(make_event, summary="Moved into next week")
+        result, writer, _ = migrate(
+            [exc],  # ...and absent from this narrow fetch
+            migrated=synced(master),
+        )
+        assert result.failed == []
+        assert result.updated == 1
+        calendar_id, master_destination_id, applied, _send = writer.applied[0]
+        assert (calendar_id, master_destination_id) == ("dst-cal", "dest-master-1")
+        assert applied.id == "exc-1"
+
+    def test_orphan_dry_run_counts_without_writes(self, migrate: Any, make_event: Any) -> None:
+        master = _master(make_event)
+        exc = _exception(make_event)
+        result, writer, _ = migrate([exc], migrated=synced(master), dry_run=True)
+        assert result.updated == 1
+        assert result.failed == []
+        assert writer.applied == []
+
+    def test_orphan_without_marker_still_fails(self, migrate: Any, make_event: Any) -> None:
+        exc = _exception(make_event, master_id="absent-master")
+        result, writer, _ = migrate([exc])
+        assert result.failed == [("exc-1", "master not migrated")]
+        assert writer.applied == []
+
+    def test_orphan_with_untrusted_marker_fails(self, migrate: Any, make_event: Any) -> None:
+        master = _master(make_event)
+        exc = _exception(make_event)
+        result, writer, _ = migrate([exc], migrated=synced(master, trusted=False))
+        # The untrusted marker itself is also flagged by the deletion pass.
+        assert ("exc-1", "master not migrated") in result.failed
+        assert writer.applied == []
+
+    def test_orphan_with_placeholder_marker_fails(self, migrate: Any, make_event: Any) -> None:
+        # A placeholder is not a real master; instances cannot be patched onto it.
+        master = _master(make_event)
+        exc = _exception(make_event)
+        result, writer, _ = migrate([exc], migrated=synced(master, placeholder=True))
+        assert result.failed == [("exc-1", "master not migrated")]
+        assert writer.applied == []
+
+    def test_orphan_apply_failure_is_recorded(self, migrate: Any, make_event: Any) -> None:
+        master = _master(make_event)
+        exc = _exception(make_event)
+        result, _, _ = migrate([exc], migrated=synced(master), fail_ids={"exc-1"})
+        assert result.updated == 0
+        assert [event_id for event_id, _ in result.failed] == ["exc-1"]

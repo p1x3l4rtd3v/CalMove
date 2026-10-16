@@ -274,7 +274,11 @@ Key behaviors:
   Modified/cancelled occurrences (exceptions) are then applied by patching the matching instance
   (`originalStartTime`) of the newly created master.
 - Order: masters before exceptions; failures on one event never abort the run (collected in
-  the report).
+  the report). An exception whose master lies outside the fetched date range is not an
+  error when the master was migrated by an earlier run: the destination marker map knows
+  the master's new id, and the exception is applied onto it (reported as an update). Only
+  exceptions whose master is neither in the fetch nor in the marker map fail with
+  "master not migrated".
 - Conference links: only Google Meet links are workspace-bound. Events with a Meet link
   get a fresh Meet conference on the new event, with the old link kept as a description
   note for reference. Events with a third-party conference (Microsoft Teams, Zoom, Webex,
